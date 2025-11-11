@@ -41,7 +41,7 @@ type Config struct {
 	Parameters   map[string]any
 }
 
-// Chat 是最核心的无状态调用函数，适用于多轮对话场景。
+// ChatMessages 是最核心的无状态调用函数，适用于多轮对话场景。
 func ChatMessages(ctx context.Context, messages []spec.Message, cfg Config) (*spec.Response, error) {
 	client, err := getOrCreateClient(cfg)
 	if err != nil {
@@ -130,6 +130,8 @@ func (c *Client) SendNoHistory(ctx context.Context, userPrompt string) (*spec.Re
 	var messages []spec.Message
 	if len(c.history) != 0 {
 		messages = append(messages, c.history...)
+		messages = append(messages, spec.NewUserMessage(userPrompt))
+	} else {
 		messages = append(messages, spec.NewUserMessage(userPrompt))
 	}
 	// 使用当前完整的历史记录进行调用

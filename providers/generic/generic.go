@@ -72,13 +72,11 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 		//foundSystem := false
 		for i, msg := range processedMessages {
 			if msg.Role == spec.RoleSystem {
-				processedMessages[i].Content += "\n/no_think"
+				messages[i].Content += "\n/no_think"
 				//foundSystem = true
 				break
 			}
 		}
-		// 如果没有找到system prompt，可以考虑创建一个，或记录一个警告
-		// 为简单起见，这里我们只处理找到的情况
 	}
 
 	requestBody := config.Parameters
