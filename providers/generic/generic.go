@@ -61,6 +61,7 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 	for _, opt := range opts {
 		opt(config)
 	}
+	requestBody := config.Parameters
 	// 为了不修改用户传入的原始messages切片，我们创建一个副本
 	processedMessages := make([]spec.Message, len(messages))
 	copy(processedMessages, messages)
@@ -79,7 +80,6 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 		}
 	}
 
-	requestBody := config.Parameters
 	if requestBody == nil {
 		requestBody = make(map[string]any)
 	}
@@ -90,6 +90,13 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 
 	if config.Temperature != nil {
 		requestBody["temperature"] = *config.Temperature
+	} else {
+		requestBody["temperature"] = spec.DefaultTemperature
+	}
+	if config.TopP != nil {
+		requestBody["top_p"] = *config.TopP
+	} else {
+		requestBody["top_p"] = 1
 	}
 
 	headers := http.Header{}

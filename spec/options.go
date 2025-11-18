@@ -57,6 +57,8 @@ func WithHTTPClient(client *http.Client) ClientOption {
 // Option 是一个用于配置单次API请求的函数类型。
 type Option func(r *RequestConfig)
 
+var DefaultTemperature = 0.2
+
 // RequestConfig 存储了单次请求的所有配置。
 type RequestConfig struct {
 	Model       string
