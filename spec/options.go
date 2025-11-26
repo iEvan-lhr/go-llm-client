@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"context"
 	"net/http"
 	"time"
 )
@@ -57,6 +58,12 @@ func WithHTTPClient(client *http.Client) ClientOption {
 // Option 是一个用于配置单次API请求的函数类型。
 type Option func(r *RequestConfig)
 
+// StreamCallback 定义了流式回调函数。
+// ctx: 上下文
+// chunk: 本次收到的增量文本内容
+// 返回 error 则中断流式接收
+type StreamCallback func(ctx context.Context, chunk string) error
+
 var DefaultTemperature = 0.2
 
 // RequestConfig 存储了单次请求的所有配置。
@@ -66,6 +73,9 @@ type RequestConfig struct {
 	MaxTokens   *int
 	TopP        *float32
 	Streaming   bool
+
+	// 【新增】StreamCallback 用于处理流式输出的每一个数据块
+	StreamCallback StreamCallback
 
 	// 【新增】Thinking 用于统一控制思考模式。
 	// 使用指针 *bool 可以区分三种状态:
@@ -129,6 +139,15 @@ func WithTopP(topP float32) Option {
 func WithStreaming() Option {
 	return func(r *RequestConfig) {
 		r.Streaming = true
+	}
+}
+
+// WithStreamCallback 启用流式响应并设置回调函数。
+// 推荐使用此方法开启流式模式。
+func WithStreamCallback(callback StreamCallback) Option {
+	return func(r *RequestConfig) {
+		r.Streaming = true
+		r.StreamCallback = callback
 	}
 }
 

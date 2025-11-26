@@ -49,3 +49,34 @@ func (r *Requester) Post(ctx context.Context, url string, headers http.Header, r
 
 	return rawBody, nil
 }
+
+// PostStream 发送请求并返回 http.Response，由调用方负责读取 Body 和关闭。
+// 用于流式(SSE)场景。
+func (r *Requester) PostStream(ctx context.Context, url string, headers http.Header, requestBody any) (*http.Response, error) {
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("requester: failed to marshal request body: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("requester: failed to create request: %w", err)
+	}
+
+	httpReq.Header = headers
+
+	resp, err := r.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("requester: request failed: %w", err)
+	}
+
+	// 注意：这里不读取也不关闭 Body，交给上层处理
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// 如果请求出错，尽力读取错误信息
+		defer resp.Body.Close()
+		rawBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("requester: API error (status %d): %s", resp.StatusCode, string(rawBody))
+	}
+
+	return resp, nil
+}
