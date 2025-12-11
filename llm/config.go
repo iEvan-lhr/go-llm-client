@@ -11,7 +11,7 @@ type Config struct {
 	SystemPrompt string
 	Thinking     *bool
 	Parameters   map[string]any
-
+	//add
 	Translation *spec.TranslationOptions
 	// StreamCallback 用于接收流式数据的回调函数
 	StreamCallback spec.StreamCallback
