@@ -168,3 +168,26 @@ func WithParameter(key string, value any) Option {
 		r.Parameters[key] = value
 	}
 }
+
+// [在 spec/options.go 中添加以下代码]
+
+// TranslationOptions 定义了翻译模型的特定参数
+type TranslationOptions struct {
+	SourceLang string `json:"source_lang"` // 例如 "auto", "English", "Chinese"
+	TargetLang string `json:"target_lang"` // 例如 "English", "Chinese"
+}
+
+// WithTranslation 是一个专用选项，用于设置翻译参数。
+// 它会将结构化的参数注入到通用的 Parameters map 中，从而被 Provider 自动处理。
+func WithTranslation(sourceLang, targetLang string) Option {
+	return func(r *RequestConfig) {
+		// 确保 Parameters 已初始化
+		if r.Parameters == nil {
+			r.Parameters = make(map[string]any)
+		}
+		r.Parameters["translation_options"] = TranslationOptions{
+			SourceLang: sourceLang,
+			TargetLang: targetLang,
+		}
+	}
+}

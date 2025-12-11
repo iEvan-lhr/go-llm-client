@@ -50,6 +50,10 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	if cfg.Thinking != nil {
 		opts = append(opts, spec.WithThinking(*cfg.Thinking))
 	}
+	// 【新增】处理 Translation 配置
+	if cfg.Translation != nil {
+		opts = append(opts, spec.WithTranslation(cfg.Translation.SourceLang, cfg.Translation.TargetLang))
+	}
 	if cfg.StreamCallback != nil {
 		opts = append(opts, spec.WithStreamCallback(cfg.StreamCallback))
 	}
