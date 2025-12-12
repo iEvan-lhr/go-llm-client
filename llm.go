@@ -37,6 +37,7 @@ type Config struct {
 	SystemPrompt string
 	Thinking     *bool
 	Parameters   map[string]any
+	Translation  *spec.TranslationOptions
 
 	// 【新增】用于接收流式数据的回调函数
 	StreamCallback spec.StreamCallback
@@ -55,6 +56,10 @@ func ChatMessages(ctx context.Context, messages []spec.Message, cfg Config) (*sp
 	}
 	if cfg.Thinking != nil {
 		opts = append(opts, spec.WithThinking(*cfg.Thinking))
+	}
+	// 【新增】处理 Translation 配置
+	if cfg.Translation != nil {
+		opts = append(opts, spec.WithTranslation(cfg.Translation.SourceLang, cfg.Translation.TargetLang))
 	}
 	// 【新增】处理流式回调
 	if cfg.StreamCallback != nil {
