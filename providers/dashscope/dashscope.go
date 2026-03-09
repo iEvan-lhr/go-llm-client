@@ -175,7 +175,6 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 	}
 
 	// ==================== 非流式处理分支 (保持原样) ====================
-
 	// 使用配置中的APIURL
 	rawBody, err := m.client.requester.Post(ctx, m.client.config.APIURL, headers, requestBody)
 	if err != nil {

@@ -78,6 +78,20 @@ func (c *Client) Send(ctx context.Context, userPrompt string) (*spec.Response, e
 	return resp, nil
 }
 
+// SendParts 发送多模态消息，并写入历史
+func (c *Client) SendParts(ctx context.Context, parts ...spec.ContentPart) (*spec.Response, error) {
+	c.history = append(c.history, spec.NewUserPartsMessage(parts...))
+
+	resp, err := c.invoke(ctx, c.history, nil)
+	if err != nil {
+		c.history = c.history[:len(c.history)-1]
+		return nil, err
+	}
+
+	c.history = append(c.history, resp.Message)
+	return resp, nil
+}
+
 // SendStream 是支持流式输出的 Send 方法。
 // 它接收一个 callback 函数，实时处理返回的文本片段。
 func (c *Client) SendStream(ctx context.Context, userPrompt string, callback spec.StreamCallback) (*spec.Response, error) {
@@ -95,6 +109,45 @@ func (c *Client) SendStream(ctx context.Context, userPrompt string, callback spe
 
 	c.history = append(c.history, resp.Message)
 	return resp, nil
+}
+
+func (c *Client) SendStreamParts(ctx context.Context, parts []spec.ContentPart, callback spec.StreamCallback) (*spec.Response, error) {
+	c.history = append(c.history, spec.NewUserPartsMessage(parts...))
+
+	tempConfig := c.config
+	tempConfig.StreamCallback = callback
+
+	resp, err := c.invoke(ctx, c.history, &tempConfig)
+	if err != nil {
+		c.history = c.history[:len(c.history)-1]
+		return nil, err
+	}
+
+	c.history = append(c.history, resp.Message)
+	return resp, nil
+}
+
+func (c *Client) SendImageURL(ctx context.Context, imageURL, question string) (*spec.Response, error) {
+	return c.SendParts(ctx,
+		spec.NewImageURLPart(imageURL),
+		spec.NewTextPart(question),
+	)
+}
+
+func (c *Client) SendImageBase64(ctx context.Context, mimeType, base64Data, question string) (*spec.Response, error) {
+	return c.SendParts(ctx,
+		spec.NewImageBase64Part(mimeType, base64Data),
+		spec.NewTextPart(question),
+	)
+}
+
+func (c *Client) SendPartsNoHistory(ctx context.Context, parts ...spec.ContentPart) (*spec.Response, error) {
+	var messages []spec.Message
+	if c.config.SystemPrompt != "" {
+		messages = append(messages, spec.NewSystemMessage(c.config.SystemPrompt))
+	}
+	messages = append(messages, spec.NewUserPartsMessage(parts...))
+	return c.invoke(ctx, messages, nil)
 }
 
 // SendStreamNoHistory 执行一次性的流式对话。
