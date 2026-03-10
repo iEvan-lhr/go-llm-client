@@ -1,6 +1,6 @@
 package llm
 
-import "github.com/ievan-lhr/go-llm-client/spec"
+import "github.com/iEvan-lhr/go-llm-client/spec"
 
 // Config 包含了执行一次Chat调用所需的所有配置。
 type Config struct {

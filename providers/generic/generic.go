@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/ievan-lhr/go-llm-client/spec"
+	"github.com/iEvan-lhr/go-llm-client/spec"
 	"net/http"
 	"regexp"
 
-	"github.com/ievan-lhr/go-llm-client/internal/requester" // 请确保这是您正确的仓库路径
+	"github.com/iEvan-lhr/go-llm-client/internal/requester" // 请确保这是您正确的仓库路径
 )
 
 // clientImpl 实现了 llm.Client

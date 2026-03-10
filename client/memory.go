@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/ievan-lhr/go-llm-client/spec"
+	"github.com/iEvan-lhr/go-llm-client/spec"
 )
 
 // SendByMemory 是一种“外部状态”调用方式。

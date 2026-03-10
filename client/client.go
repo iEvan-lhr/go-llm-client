@@ -4,8 +4,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/ievan-lhr/go-llm-client/llm"
-	"github.com/ievan-lhr/go-llm-client/spec"
+	"github.com/iEvan-lhr/go-llm-client/llm"
+	"github.com/iEvan-lhr/go-llm-client/spec"
 )
 
 // Client 是一个有状态的、预配置好的LLM客户端。

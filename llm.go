@@ -6,10 +6,10 @@ import (
 	"log"
 	"sync"
 
-	"github.com/ievan-lhr/go-llm-client/providers/dashscope"
-	"github.com/ievan-lhr/go-llm-client/providers/generic"
-	"github.com/ievan-lhr/go-llm-client/providers/openai"
-	"github.com/ievan-lhr/go-llm-client/spec"
+	"github.com/iEvan-lhr/go-llm-client/providers/dashscope"
+	"github.com/iEvan-lhr/go-llm-client/providers/generic"
+	"github.com/iEvan-lhr/go-llm-client/providers/openai"
+	"github.com/iEvan-lhr/go-llm-client/spec"
 )
 
 // --- 1. 无状态函数式 API (保留，不弃用) ---

@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/ievan-lhr/go-llm-client/internal/requester"
-	"github.com/ievan-lhr/go-llm-client/spec"
+	"github.com/iEvan-lhr/go-llm-client/internal/requester"
+	"github.com/iEvan-lhr/go-llm-client/spec"
 	"net/http"
 	"strings"
 )
