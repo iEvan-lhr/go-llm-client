@@ -15,6 +15,9 @@ type Config struct {
 	Translation *spec.TranslationOptions
 	// StreamCallback 用于接收流式数据的回调函数
 	StreamCallback spec.StreamCallback
+	// 图片相关操作
+	Text2Image bool
+	ImageEdit  bool
 }
 
 var (

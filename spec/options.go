@@ -85,6 +85,25 @@ type RequestConfig struct {
 	Thinking *bool
 
 	Parameters map[string]any
+
+	text2Image bool
+	imageEdit  bool
+}
+
+func (r *RequestConfig) SetText2Image(text2Image bool) {
+	r.text2Image = text2Image
+}
+
+func (r *RequestConfig) IsText2Image() bool {
+	return r.text2Image
+}
+
+func (r *RequestConfig) SetImageEdit(imageEdit bool) {
+	r.imageEdit = imageEdit
+}
+
+func (r *RequestConfig) IsImageEdit() bool {
+	return r.imageEdit
 }
 
 // NewRequestConfig 创建一个带有默认值的请求配置。
@@ -158,6 +177,17 @@ func WithParameters(params map[string]any) Option {
 		for k, v := range params {
 			r.Parameters[k] = v
 		}
+	}
+}
+
+// WithText2ImageParameters 附加一个map中所有的任意键值对参数。
+// 如果key已存在，则会被覆盖。
+func WithText2ImageParameters(params map[string]any) Option {
+	return func(r *RequestConfig) {
+		for k, v := range params {
+			r.Parameters[k] = v
+		}
+		r.text2Image = true
 	}
 }
 

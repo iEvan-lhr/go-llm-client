@@ -92,6 +92,19 @@ func (c *Client) SendParts(ctx context.Context, parts ...spec.ContentPart) (*spe
 	return resp, nil
 }
 
+func (c *Client) SendText2Image(ctx context.Context, userPrompt string) (*spec.Response, error) {
+	c.history = append(c.history, spec.NewUserMessage(userPrompt))
+
+	resp, err := c.invoke(ctx, c.history, nil)
+	if err != nil {
+		c.history = c.history[:len(c.history)-1]
+		return nil, err
+	}
+
+	c.history = append(c.history, resp.Message)
+	return resp, nil
+}
+
 // SendStream 是支持流式输出的 Send 方法。
 // 它接收一个 callback 函数，实时处理返回的文本片段。
 func (c *Client) SendStream(ctx context.Context, userPrompt string, callback spec.StreamCallback) (*spec.Response, error) {
