@@ -5,13 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/iEvan-lhr/go-llm-client/internal/requester"
-	"github.com/iEvan-lhr/go-llm-client/spec"
 	"io"
 	"net/http"
+	"net/url" // [新增] 用于安全的 URL 解析
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/iEvan-lhr/go-llm-client/internal/requester"
+	"github.com/iEvan-lhr/go-llm-client/spec"
 )
 
 // clientImpl 实现了 llm.Client
@@ -122,14 +124,16 @@ func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Messag
 
 	// 从 config.Parameters 提取用户自定义参数
 	if config.Parameters != nil {
-		// negative_prompt 属于 input 域
 		if negPrompt, ok := config.Parameters["negative_prompt"]; ok {
-			requestBody["input"].(map[string]any)["negative_prompt"] = negPrompt
+			if inputMap, ok := requestBody["input"].(map[string]any); ok {
+				inputMap["negative_prompt"] = negPrompt
+			}
 		}
-		// 其他参数映射到 parameters 域
 		for _, key := range []string{"size", "n", "prompt_extend", "watermark"} {
 			if val, ok := config.Parameters[key]; ok {
-				requestBody["parameters"].(map[string]any)[key] = val
+				if paramMap, ok := requestBody["parameters"].(map[string]any); ok {
+					paramMap[key] = val
+				}
 			}
 		}
 	}
@@ -142,7 +146,6 @@ func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Messag
 
 	// 4. 发起任务创建请求（固定使用文生图端点）
 	text2ImageURL := "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis"
-	// 支持新加坡地域：若 APIURL 包含 dashscope-intl 则替换端点
 	if strings.Contains(m.client.config.APIURL, "dashscope-intl") {
 		text2ImageURL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis"
 	}
@@ -167,13 +170,16 @@ func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Messag
 	}
 
 	// 6. 轮询任务状态（生产级策略：前30秒每3秒，之后指数退避，总超时120秒）
-	taskURL := fmt.Sprintf("%s/api/v1/tasks/%s",
-		strings.TrimSuffix(m.client.config.APIURL, "/api/v1"), // 自动适配地域前缀
-		createResp.Output.TaskId,
-	)
+	// 【修复 2】使用 url.Parse 安全提取 Scheme 和 Host 进行任务 API 拼接
+	parsedURL, err := url.Parse(m.client.config.APIURL)
+	if err != nil {
+		return nil, fmt.Errorf("dashscope invalid api url: %w", err)
+	}
+	taskURL := fmt.Sprintf("%s://%s/api/v1/tasks/%s", parsedURL.Scheme, parsedURL.Host, createResp.Output.TaskId)
+
 	var lastTaskResp []byte
 	maxRetries := 40
-	baseDelay := 3 * time.Second
+	delay := 3 * time.Second // 初始轮询延迟
 
 	for i := 0; i < maxRetries; i++ {
 		// 检查上下文取消
@@ -181,16 +187,15 @@ func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Messag
 			return nil, fmt.Errorf("text2image task cancelled: %w", err)
 		}
 
-		// 首次查询不延迟，后续采用退避策略
+		// 【修复 5】采用更加安全的动态翻倍退避策略
 		if i > 0 {
-			delay := baseDelay
-			if i > 10 { // 30秒后开始指数退避
-				delay = baseDelay * time.Duration(1<<(i-10))
+			time.Sleep(delay)
+			if i > 10 { // 前 10 次不退避 (约30秒)，之后开始翻倍
+				delay *= 2
 				if delay > 15*time.Second {
 					delay = 15 * time.Second
 				}
 			}
-			time.Sleep(delay)
 		}
 
 		// 查询任务状态
@@ -201,48 +206,54 @@ func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Messag
 		}
 
 		var taskResult struct {
-			TaskStatus string `json:"task_status"`
-			Output     struct {
-				Results []struct {
-					URL string `json:"url"`
+			RequestId string `json:"request_id"`
+			Output    struct {
+				TaskId        string `json:"task_id"`
+				TaskStatus    string `json:"task_status"`
+				SubmitTime    string `json:"submit_time"`
+				ScheduledTime string `json:"scheduled_time"`
+				EndTime       string `json:"end_time"`
+				Results       []struct {
+					OrigPrompt   string `json:"orig_prompt"`
+					ActualPrompt string `json:"actual_prompt"`
+					Url          string `json:"url"`
 				} `json:"results"`
 			} `json:"output"`
-			// 错误详情透传（用于诊断）
-			Code    string `json:"code"`
-			Message string `json:"message"`
+			Usage struct {
+				ImageCount int `json:"image_count"`
+			} `json:"usage"`
 		}
 		if err := json.Unmarshal(taskRespBody, &taskResult); err != nil {
 			continue // 解析失败重试
 		}
 
-		switch taskResult.TaskStatus {
+		switch taskResult.Output.TaskStatus {
 		case "SUCCEEDED":
 			if len(taskResult.Output.Results) == 0 {
 				return nil, fmt.Errorf("task succeeded but no image results returned")
 			}
-			imageURL := taskResult.Output.Results[0].URL
+			imageURL := taskResult.Output.Results[0].Url
 			if imageURL == "" {
 				return nil, fmt.Errorf("empty image URL in task result")
 			}
-			// ⚠️ 生产环境需立即下载持久化（URL 24h 有效期），此处仅返回 URL
 			return &spec.Response{
 				Message: spec.Message{
 					Role:    spec.RoleAssistant,
-					Content: imageURL, // 图像 URL 作为文本内容返回
+					Content: imageURL,
 				},
-				RawResponse: taskRespBody, // 任务最终结果
+				RawResponse: taskRespBody,
 			}, nil
 
 		case "FAILED":
 			return nil, fmt.Errorf("dashscope text2image task failed (code: %s): %s",
-				taskResult.Code, taskResult.Message)
+				taskResult.Output.TaskStatus, taskResult.Output.Results)
 
 		case "PENDING", "RUNNING", "QUEUED":
 			continue // 继续轮询
 
 		default:
 			return nil, fmt.Errorf("unknown task status: %s, response: %s",
-				taskResult.TaskStatus, string(taskRespBody))
+				taskResult.Output.TaskStatus, string(taskRespBody))
 		}
 	}
 
@@ -251,10 +262,14 @@ func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Messag
 
 // handleChat 处理标准聊天请求（流式/非流式）
 func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, config *spec.RequestConfig) (*spec.Response, error) {
-	requestBody := config.Parameters
-	if requestBody == nil {
-		requestBody = make(map[string]any)
+	// 【修复 1】避免浅拷贝修改用户的 config.Parameters 引发的数据污染和并发 Panic
+	requestBody := make(map[string]any)
+	if config.Parameters != nil {
+		for k, v := range config.Parameters {
+			requestBody[k] = v
+		}
 	}
+
 	// 【适配逻辑】将通用的 Thinking 选项翻译为 provider 特定的参数
 	if config.Thinking != nil {
 		requestBody["enable_thinking"] = *config.Thinking
@@ -289,12 +304,12 @@ func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, con
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
+			// 【修复 4】兼顾带空格和不带空格的前置情况，并裁剪空白
+			if !strings.HasPrefix(line, "data:") {
 				continue
 			}
 
-			dataStr := strings.TrimPrefix(line, "data: ")
-			dataStr = strings.TrimSpace(dataStr)
+			dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if dataStr == "[DONE]" {
 				break
 			}
@@ -373,8 +388,14 @@ func (m *modelImpl) Get(ctx context.Context, url string, headers http.Header) ([
 		}
 	}
 
+	// 【修复 3】防止 m.client.requester.HTTPClient 为空时发生 panic
+	client := m.client.requester.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+
 	// 发起请求
-	resp, err := m.client.requester.HTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		// 区分上下文取消/超时 与 网络错误
 		if ctx.Err() != nil {
@@ -392,10 +413,6 @@ func (m *modelImpl) Get(ctx context.Context, url string, headers http.Header) ([
 
 	// 错误状态码处理
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// 构造友好的错误信息
-		//errMsg := fmt.Sprintf("dashscope: GET request failed with status %d %s, url=%s, response=%s",
-		//	resp.StatusCode, resp.Status, url, string(body))
-
 		// 特殊错误分类（便于调用方实现重试策略）
 		switch resp.StatusCode {
 		case http.StatusTooManyRequests: // 429
@@ -413,15 +430,6 @@ func (m *modelImpl) Get(ctx context.Context, url string, headers http.Header) ([
 				ResponseBody: body,
 			}
 		default:
-			//// 尝试解析 DashScope 错误结构
-			//var errResp struct {
-			//	Code    string `json:"code"`
-			//	Message string `json:"message"`
-			//}
-			//if json.Unmarshal(body, &errResp) == nil && errResp.Code != "" {
-			//	errMsg = fmt.Sprintf("dashscope: API error code=%s, message=%s, status=%d",
-			//		errResp.Code, errResp.Message, resp.StatusCode)
-			//}
 			return nil, fmt.Errorf(
 				"dashscope: GET request failed with status %d %s, url=%s, response=%.*s",
 				resp.StatusCode,

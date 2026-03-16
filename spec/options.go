@@ -18,6 +18,7 @@ type ClientConfig struct {
 	APIKey     string
 	APIURL     string
 	HTTPClient *http.Client
+	Text2Image bool
 }
 
 // NewClientConfig 创建一个带有默认值的客户端配置。
@@ -187,6 +188,14 @@ func WithText2ImageParameters(params map[string]any) Option {
 		for k, v := range params {
 			r.Parameters[k] = v
 		}
+		r.text2Image = true
+	}
+}
+
+// WithText2Image 附加一个map中所有的任意键值对参数。
+// 如果key已存在，则会被覆盖。
+func WithText2Image() Option {
+	return func(r *RequestConfig) {
 		r.text2Image = true
 	}
 }

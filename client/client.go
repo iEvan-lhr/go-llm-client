@@ -36,7 +36,7 @@ func New(cfg llm.Config) (*Client, error) {
 }
 
 // invoke 调用底层的 Chat 方法，统一封装 Option 的构建逻辑
-func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig *llm.Config) (*spec.Response, error) {
+func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig *llm.Config, extraOpts ...spec.Option) (*spec.Response, error) {
 	// 使用传入的临时配置，如果没有则使用 Client 自身的配置
 	cfg := c.config
 	if tempConfig != nil {
@@ -57,7 +57,9 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	if cfg.StreamCallback != nil {
 		opts = append(opts, spec.WithStreamCallback(cfg.StreamCallback))
 	}
-
+	if len(extraOpts) > 0 {
+		opts = append(opts, extraOpts...)
+	}
 	// 直接使用结构体中保存的 client 实例，无需再次查询缓存
 	model := c.client.Model(cfg.Model)
 	return model.Chat(ctx, messages, opts...)
@@ -95,7 +97,7 @@ func (c *Client) SendParts(ctx context.Context, parts ...spec.ContentPart) (*spe
 func (c *Client) SendText2Image(ctx context.Context, userPrompt string) (*spec.Response, error) {
 	c.history = append(c.history, spec.NewUserMessage(userPrompt))
 
-	resp, err := c.invoke(ctx, c.history, nil)
+	resp, err := c.invoke(ctx, c.history, nil, spec.WithText2Image())
 	if err != nil {
 		c.history = c.history[:len(c.history)-1]
 		return nil, err
