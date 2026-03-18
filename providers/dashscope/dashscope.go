@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url" // [新增] 用于安全的 URL 解析
 	"strconv"
 	"strings"
 	"time"
@@ -97,7 +96,7 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 	}
 }
 
-// handleText2Image 处理文生图异步任务流程
+// handleText2Image 处理文生图同步调用流程（qwen-image-2.0-pro）
 func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Message, config *spec.RequestConfig) (*spec.Response, error) {
 	// 1. 提取 Prompt（取最后一条用户消息）
 	if len(messages) == 0 {
@@ -108,11 +107,20 @@ func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Messag
 		return nil, fmt.Errorf("empty prompt for text2image")
 	}
 
-	// 2. 构建请求体（自动映射 negative_prompt 到 input，其他参数到 parameters）
+	// 2. 构建请求体（qwen-image-2.0-pro 要求 input.messages 格式）
 	requestBody := map[string]any{
 		"model": m.name,
 		"input": map[string]any{
-			"prompt": prompt,
+			"messages": []map[string]any{
+				{
+					"role": "user",
+					"content": []map[string]any{
+						{
+							"text": prompt,
+						},
+					},
+				},
+			},
 		},
 		"parameters": map[string]any{
 			"size":          "1664*928", // qwen-image-plus 默认分辨率
@@ -124,11 +132,13 @@ func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Messag
 
 	// 从 config.Parameters 提取用户自定义参数
 	if config.Parameters != nil {
+		// negative_prompt 放在 parameters 中，不是 input 中
 		if negPrompt, ok := config.Parameters["negative_prompt"]; ok {
-			if inputMap, ok := requestBody["input"].(map[string]any); ok {
-				inputMap["negative_prompt"] = negPrompt
+			if paramMap, ok := requestBody["parameters"].(map[string]any); ok {
+				paramMap["negative_prompt"] = negPrompt
 			}
 		}
+		// 其他参数覆盖默认值
 		for _, key := range []string{"size", "n", "prompt_extend", "watermark"} {
 			if val, ok := config.Parameters[key]; ok {
 				if paramMap, ok := requestBody["parameters"].(map[string]any); ok {
@@ -138,126 +148,85 @@ func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Messag
 		}
 	}
 
-	// 3. 构建请求头（关键：启用异步模式）
+	// 3. 构建请求头（同步调用，无需异步头）
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json")
 	headers.Set("Authorization", "Bearer "+m.client.config.APIKey)
-	headers.Set("X-DashScope-Async", "enable")
 
-	// 4. 发起任务创建请求（固定使用文生图端点）
-	text2ImageURL := "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis"
+	// 4. 发起请求（使用 multimodal-generation 端点）
+	generationURL := "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 	if strings.Contains(m.client.config.APIURL, "dashscope-intl") {
-		text2ImageURL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis"
+		generationURL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 	}
 
-	rawBody, err := m.client.requester.Post(ctx, text2ImageURL, headers, requestBody)
+	rawBody, err := m.client.requester.Post(ctx, generationURL, headers, requestBody)
 	if err != nil {
-		return nil, fmt.Errorf("dashscope text2image create task failed: %w", err)
+		return nil, fmt.Errorf("dashscope qwen-image generation failed: %w", err)
 	}
 
-	// 5. 解析任务 ID
-	var createResp struct {
+	// 5. 解析响应（同步返回，无需轮询任务）
+	// 响应格式：output.choices[0].message.content[0].image
+	var genResp struct {
 		Output struct {
-			TaskId     string `json:"task_id"`
-			TaskStatus string `json:"task_status"`
-		}
+			Choices []struct {
+				FinishReason string `json:"finish_reason"`
+				Message      struct {
+					Role    string `json:"role"`
+					Content []struct {
+						Image string `json:"image"`
+						Text  string `json:"text"`
+					} `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		} `json:"output"`
+		Usage struct {
+			ImageCount int `json:"image_count"`
+			Width      int `json:"width"`
+			Height     int `json:"height"`
+		} `json:"usage"`
+		RequestId string `json:"request_id"`
+		Code      string `json:"code"`
+		Message   string `json:"message"`
 	}
-	if err := json.Unmarshal(rawBody, &createResp); err != nil {
-		return nil, fmt.Errorf("dashscope failed to parse task_id: %w, response: %s", err, string(rawBody))
-	}
-	if createResp.Output.TaskId == "" {
-		return nil, fmt.Errorf("empty task_id in create response: %s", string(rawBody))
+
+	if err := json.Unmarshal(rawBody, &genResp); err != nil {
+		return nil, fmt.Errorf("dashscope failed to parse response: %w, response: %s", err, string(rawBody))
 	}
 
-	// 6. 轮询任务状态（生产级策略：前30秒每3秒，之后指数退避，总超时120秒）
-	// 【修复 2】使用 url.Parse 安全提取 Scheme 和 Host 进行任务 API 拼接
-	parsedURL, err := url.Parse(m.client.config.APIURL)
-	if err != nil {
-		return nil, fmt.Errorf("dashscope invalid api url: %w", err)
+	// 检查错误响应（优先检查 code 字段）
+	if genResp.Code != "" {
+		return nil, fmt.Errorf("dashscope generation failed (code: %s): %s", genResp.Code, genResp.Message)
 	}
-	taskURL := fmt.Sprintf("%s://%s/api/v1/tasks/%s", parsedURL.Scheme, parsedURL.Host, createResp.Output.TaskId)
 
-	var lastTaskResp []byte
-	maxRetries := 40
-	delay := 3 * time.Second // 初始轮询延迟
+	// 提取图像 URL
+	if len(genResp.Output.Choices) == 0 {
+		return nil, fmt.Errorf("no choices in generation response: %s", string(rawBody))
+	}
 
-	for i := 0; i < maxRetries; i++ {
-		// 检查上下文取消
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("text2image task cancelled: %w", err)
-		}
+	content := genResp.Output.Choices[0].Message.Content
+	if len(content) == 0 {
+		return nil, fmt.Errorf("empty content in generation response")
+	}
 
-		// 【修复 5】采用更加安全的动态翻倍退避策略
-		if i > 0 {
-			time.Sleep(delay)
-			if i > 10 { // 前 10 次不退避 (约30秒)，之后开始翻倍
-				delay *= 2
-				if delay > 15*time.Second {
-					delay = 15 * time.Second
-				}
-			}
-		}
-
-		// 查询任务状态
-		taskRespBody, err := m.Get(ctx, taskURL, headers)
-		lastTaskResp = taskRespBody
-		if err != nil {
-			continue // 网络错误重试
-		}
-
-		var taskResult struct {
-			RequestId string `json:"request_id"`
-			Output    struct {
-				TaskId        string `json:"task_id"`
-				TaskStatus    string `json:"task_status"`
-				SubmitTime    string `json:"submit_time"`
-				ScheduledTime string `json:"scheduled_time"`
-				EndTime       string `json:"end_time"`
-				Results       []struct {
-					OrigPrompt   string `json:"orig_prompt"`
-					ActualPrompt string `json:"actual_prompt"`
-					Url          string `json:"url"`
-				} `json:"results"`
-			} `json:"output"`
-			Usage struct {
-				ImageCount int `json:"image_count"`
-			} `json:"usage"`
-		}
-		if err := json.Unmarshal(taskRespBody, &taskResult); err != nil {
-			continue // 解析失败重试
-		}
-
-		switch taskResult.Output.TaskStatus {
-		case "SUCCEEDED":
-			if len(taskResult.Output.Results) == 0 {
-				return nil, fmt.Errorf("task succeeded but no image results returned")
-			}
-			imageURL := taskResult.Output.Results[0].Url
-			if imageURL == "" {
-				return nil, fmt.Errorf("empty image URL in task result")
-			}
-			return &spec.Response{
-				Message: spec.Message{
-					Role:    spec.RoleAssistant,
-					Content: imageURL,
-				},
-				RawResponse: taskRespBody,
-			}, nil
-
-		case "FAILED":
-			return nil, fmt.Errorf("dashscope text2image task failed (code: %s): %s",
-				taskResult.Output.TaskStatus, taskResult.Output.Results)
-
-		case "PENDING", "RUNNING", "QUEUED":
-			continue // 继续轮询
-
-		default:
-			return nil, fmt.Errorf("unknown task status: %s, response: %s",
-				taskResult.Output.TaskStatus, string(taskRespBody))
+	var imageURL string
+	for _, c := range content {
+		if c.Image != "" {
+			imageURL = c.Image
+			break
 		}
 	}
 
-	return nil, fmt.Errorf("text2image task timeout after 120 seconds, last response: %s", string(lastTaskResp))
+	if imageURL == "" {
+		return nil, fmt.Errorf("no image URL in generation response: %s", string(rawBody))
+	}
+
+	return &spec.Response{
+		Message: spec.Message{
+			Role:    spec.RoleAssistant,
+			Content: imageURL,
+		},
+		RawResponse: rawBody,
+	}, nil
 }
 
 // handleChat 处理标准聊天请求（流式/非流式）
