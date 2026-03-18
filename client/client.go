@@ -94,10 +94,44 @@ func (c *Client) SendParts(ctx context.Context, parts ...spec.ContentPart) (*spe
 	return resp, nil
 }
 
-func (c *Client) SendText2Image(ctx context.Context, userPrompt string) (*spec.Response, error) {
+// ============== 修改：SendText2Image 方法 ==============
+
+// SendText2Image 发送文生图请求（支持自定义配置）
+// 用法示例：
+//
+//	resp, err := client.SendText2Image(ctx, "一只可爱的猫")
+//	resp, err := client.SendText2Image(ctx, "一只可爱的猫",
+//	    WithText2ImageSize("2048*2048"),
+//	    WithText2ImageWatermark(false),
+//	    WithText2ImageNegativePrompt("低分辨率，模糊"))
+func (c *Client) SendText2Image(ctx context.Context, userPrompt string, opts ...spec.Text2ImageOption) (*spec.Response, error) {
 	c.history = append(c.history, spec.NewUserMessage(userPrompt))
 
-	resp, err := c.invoke(ctx, c.history, nil, spec.WithText2Image())
+	// 应用文生图配置选项
+	tiConfig := applyText2ImageOptions(opts...)
+
+	// 将文生图配置转换为 Parameters map
+	parameters := map[string]any{
+		"size": tiConfig.Size,
+		"n":    tiConfig.ImageCount,
+	}
+	if tiConfig.Watermark != nil {
+		parameters["watermark"] = *tiConfig.Watermark
+	}
+	if tiConfig.PromptExtend != nil {
+		parameters["prompt_extend"] = *tiConfig.PromptExtend
+	}
+	if tiConfig.NegativePrompt != "" {
+		parameters["negative_prompt"] = tiConfig.NegativePrompt
+	}
+
+	// 创建临时配置，注入 Parameters
+	tempConfig := &llm.Config{
+		Model:      c.config.Model,
+		Parameters: parameters,
+	}
+
+	resp, err := c.invoke(ctx, c.history, tempConfig, spec.WithText2Image())
 	if err != nil {
 		c.history = c.history[:len(c.history)-1]
 		return nil, err
@@ -105,6 +139,25 @@ func (c *Client) SendText2Image(ctx context.Context, userPrompt string) (*spec.R
 
 	c.history = append(c.history, resp.Message)
 	return resp, nil
+}
+
+// applyText2ImageOptions 应用文生图选项到配置
+func applyText2ImageOptions(opts ...spec.Text2ImageOption) *spec.Text2ImageConfig {
+	cfg := &spec.Text2ImageConfig{
+		Size:         "1024*1024", // 默认尺寸
+		Watermark:    ptrBool(false),
+		PromptExtend: ptrBool(true),
+		ImageCount:   1,
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return cfg
+}
+
+// ptrBool 辅助函数：返回 bool 指针
+func ptrBool(b bool) *bool {
+	return &b
 }
 
 // SendStream 是支持流式输出的 Send 方法。
