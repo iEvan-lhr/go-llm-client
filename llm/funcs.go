@@ -3,7 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
-	"github.com/ievan-lhr/go-llm-client/spec"
+	"github.com/iEvan-lhr/go-llm-client/spec"
 )
 
 // ChatMessages 是最核心的无状态调用函数，适用于多轮对话场景。

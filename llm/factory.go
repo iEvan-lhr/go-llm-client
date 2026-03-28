@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/ievan-lhr/go-llm-client/providers/dashscope"
-	"github.com/ievan-lhr/go-llm-client/providers/generic"
-	"github.com/ievan-lhr/go-llm-client/providers/openai"
-	"github.com/ievan-lhr/go-llm-client/spec"
+	"github.com/iEvan-lhr/go-llm-client/providers/dashscope"
+	"github.com/iEvan-lhr/go-llm-client/providers/generic"
+	"github.com/iEvan-lhr/go-llm-client/providers/openai"
+	"github.com/iEvan-lhr/go-llm-client/spec"
 )
 
 // clientCache 用于缓存已初始化的客户端，避免重复创建，提高性能。

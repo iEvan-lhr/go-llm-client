@@ -1,6 +1,6 @@
 package llm
 
-import "github.com/ievan-lhr/go-llm-client/spec"
+import "github.com/iEvan-lhr/go-llm-client/spec"
 
 // Config 包含了执行一次Chat调用所需的所有配置。
 type Config struct {
@@ -15,6 +15,9 @@ type Config struct {
 	Translation *spec.TranslationOptions
 	// StreamCallback 用于接收流式数据的回调函数
 	StreamCallback spec.StreamCallback
+	// 图片相关操作
+	Text2Image bool
+	ImageEdit  bool
 }
 
 var (

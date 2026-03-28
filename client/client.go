@@ -4,8 +4,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/ievan-lhr/go-llm-client/llm"
-	"github.com/ievan-lhr/go-llm-client/spec"
+	"github.com/iEvan-lhr/go-llm-client/llm"
+	"github.com/iEvan-lhr/go-llm-client/spec"
 )
 
 // Client 是一个有状态的、预配置好的LLM客户端。
@@ -36,7 +36,7 @@ func New(cfg llm.Config) (*Client, error) {
 }
 
 // invoke 调用底层的 Chat 方法，统一封装 Option 的构建逻辑
-func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig *llm.Config) (*spec.Response, error) {
+func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig *llm.Config, extraOpts ...spec.Option) (*spec.Response, error) {
 	// 使用传入的临时配置，如果没有则使用 Client 自身的配置
 	cfg := c.config
 	if tempConfig != nil {
@@ -57,7 +57,9 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	if cfg.StreamCallback != nil {
 		opts = append(opts, spec.WithStreamCallback(cfg.StreamCallback))
 	}
-
+	if len(extraOpts) > 0 {
+		opts = append(opts, extraOpts...)
+	}
 	// 直接使用结构体中保存的 client 实例，无需再次查询缓存
 	model := c.client.Model(cfg.Model)
 	return model.Chat(ctx, messages, opts...)
@@ -78,6 +80,86 @@ func (c *Client) Send(ctx context.Context, userPrompt string) (*spec.Response, e
 	return resp, nil
 }
 
+// SendParts 发送多模态消息，并写入历史
+func (c *Client) SendParts(ctx context.Context, parts ...spec.ContentPart) (*spec.Response, error) {
+	c.history = append(c.history, spec.NewUserPartsMessage(parts...))
+
+	resp, err := c.invoke(ctx, c.history, nil)
+	if err != nil {
+		c.history = c.history[:len(c.history)-1]
+		return nil, err
+	}
+
+	c.history = append(c.history, resp.Message)
+	return resp, nil
+}
+
+// ============== 修改：SendText2Image 方法 ==============
+
+// SendText2Image 发送文生图请求（支持自定义配置）
+// 用法示例：
+//
+//	resp, err := client.SendText2Image(ctx, "一只可爱的猫")
+//	resp, err := client.SendText2Image(ctx, "一只可爱的猫",
+//	    WithText2ImageSize("2048*2048"),
+//	    WithText2ImageWatermark(false),
+//	    WithText2ImageNegativePrompt("低分辨率，模糊"))
+func (c *Client) SendText2Image(ctx context.Context, userPrompt string, opts ...spec.Text2ImageOption) (*spec.Response, error) {
+	c.history = append(c.history, spec.NewUserMessage(userPrompt))
+
+	// 应用文生图配置选项
+	tiConfig := applyText2ImageOptions(opts...)
+
+	// 将文生图配置转换为 Parameters map
+	parameters := map[string]any{
+		"size": tiConfig.Size,
+		"n":    tiConfig.ImageCount,
+	}
+	if tiConfig.Watermark != nil {
+		parameters["watermark"] = *tiConfig.Watermark
+	}
+	if tiConfig.PromptExtend != nil {
+		parameters["prompt_extend"] = *tiConfig.PromptExtend
+	}
+	if tiConfig.NegativePrompt != "" {
+		parameters["negative_prompt"] = tiConfig.NegativePrompt
+	}
+
+	// 创建临时配置，注入 Parameters
+	tempConfig := &llm.Config{
+		Model:      c.config.Model,
+		Parameters: parameters,
+	}
+
+	resp, err := c.invoke(ctx, c.history, tempConfig, spec.WithText2Image())
+	if err != nil {
+		c.history = c.history[:len(c.history)-1]
+		return nil, err
+	}
+
+	c.history = append(c.history, resp.Message)
+	return resp, nil
+}
+
+// applyText2ImageOptions 应用文生图选项到配置
+func applyText2ImageOptions(opts ...spec.Text2ImageOption) *spec.Text2ImageConfig {
+	cfg := &spec.Text2ImageConfig{
+		Size:         "1024*1024", // 默认尺寸
+		Watermark:    ptrBool(false),
+		PromptExtend: ptrBool(true),
+		ImageCount:   1,
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return cfg
+}
+
+// ptrBool 辅助函数：返回 bool 指针
+func ptrBool(b bool) *bool {
+	return &b
+}
+
 // SendStream 是支持流式输出的 Send 方法。
 // 它接收一个 callback 函数，实时处理返回的文本片段。
 func (c *Client) SendStream(ctx context.Context, userPrompt string, callback spec.StreamCallback) (*spec.Response, error) {
@@ -95,6 +177,45 @@ func (c *Client) SendStream(ctx context.Context, userPrompt string, callback spe
 
 	c.history = append(c.history, resp.Message)
 	return resp, nil
+}
+
+func (c *Client) SendStreamParts(ctx context.Context, parts []spec.ContentPart, callback spec.StreamCallback) (*spec.Response, error) {
+	c.history = append(c.history, spec.NewUserPartsMessage(parts...))
+
+	tempConfig := c.config
+	tempConfig.StreamCallback = callback
+
+	resp, err := c.invoke(ctx, c.history, &tempConfig)
+	if err != nil {
+		c.history = c.history[:len(c.history)-1]
+		return nil, err
+	}
+
+	c.history = append(c.history, resp.Message)
+	return resp, nil
+}
+
+func (c *Client) SendImageURL(ctx context.Context, imageURL, question string) (*spec.Response, error) {
+	return c.SendParts(ctx,
+		spec.NewImageURLPart(imageURL),
+		spec.NewTextPart(question),
+	)
+}
+
+func (c *Client) SendImageBase64(ctx context.Context, mimeType, base64Data, question string) (*spec.Response, error) {
+	return c.SendParts(ctx,
+		spec.NewImageBase64Part(mimeType, base64Data),
+		spec.NewTextPart(question),
+	)
+}
+
+func (c *Client) SendPartsNoHistory(ctx context.Context, parts ...spec.ContentPart) (*spec.Response, error) {
+	var messages []spec.Message
+	if c.config.SystemPrompt != "" {
+		messages = append(messages, spec.NewSystemMessage(c.config.SystemPrompt))
+	}
+	messages = append(messages, spec.NewUserPartsMessage(parts...))
+	return c.invoke(ctx, messages, nil)
 }
 
 // SendStreamNoHistory 执行一次性的流式对话。

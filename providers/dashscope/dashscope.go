@@ -5,10 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/ievan-lhr/go-llm-client/internal/requester"
-	"github.com/ievan-lhr/go-llm-client/spec"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/iEvan-lhr/go-llm-client/internal/requester"
+	"github.com/iEvan-lhr/go-llm-client/spec"
 )
 
 // clientImpl 实现了 llm.Client
@@ -79,13 +83,164 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 		opt(config)
 	}
 
-	requestBody := config.Parameters
-	if requestBody == nil {
-		requestBody = make(map[string]any)
+	switch {
+	case config.IsText2Image():
+		return m.handleText2Image(ctx, messages, config)
+
+	case config.IsImageEdit():
+		// 预留 ImageEdit 实现位置（根据 DashScope API 文档后续扩展）
+		return nil, fmt.Errorf("image edit is not supported yet for model %s", m.name)
+
+	default:
+		return m.handleChat(ctx, messages, config)
 	}
+}
+
+// handleText2Image 处理文生图同步调用流程（qwen-image-2.0-pro）
+func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Message, config *spec.RequestConfig) (*spec.Response, error) {
+	// 1. 提取 Prompt（取最后一条用户消息）
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("no messages provided for text2image")
+	}
+	prompt := messages[len(messages)-1].Content
+	if prompt == "" {
+		return nil, fmt.Errorf("empty prompt for text2image")
+	}
+
+	// 2. 构建请求体（qwen-image-2.0-pro 要求 input.messages 格式）
+	requestBody := map[string]any{
+		"model": m.name,
+		"input": map[string]any{
+			"messages": []map[string]any{
+				{
+					"role": "user",
+					"content": []map[string]any{
+						{
+							"text": prompt,
+						},
+					},
+				},
+			},
+		},
+		"parameters": map[string]any{
+			"size":          "1664*928", // qwen-image-plus 默认分辨率
+			"n":             1,
+			"prompt_extend": true,
+			"watermark":     false,
+		},
+	}
+
+	// 从 config.Parameters 提取用户自定义参数
+	if config.Parameters != nil {
+		// negative_prompt 放在 parameters 中，不是 input 中
+		if negPrompt, ok := config.Parameters["negative_prompt"]; ok {
+			if paramMap, ok := requestBody["parameters"].(map[string]any); ok {
+				paramMap["negative_prompt"] = negPrompt
+			}
+		}
+		// 其他参数覆盖默认值
+		for _, key := range []string{"size", "n", "prompt_extend", "watermark"} {
+			if val, ok := config.Parameters[key]; ok {
+				if paramMap, ok := requestBody["parameters"].(map[string]any); ok {
+					paramMap[key] = val
+				}
+			}
+		}
+	}
+
+	// 3. 构建请求头（同步调用，无需异步头）
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Authorization", "Bearer "+m.client.config.APIKey)
+
+	// 4. 发起请求（使用 multimodal-generation 端点）
+	generationURL := "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+	if strings.Contains(m.client.config.APIURL, "dashscope-intl") {
+		generationURL = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+	}
+
+	rawBody, err := m.client.requester.Post(ctx, generationURL, headers, requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("dashscope qwen-image generation failed: %w", err)
+	}
+
+	// 5. 解析响应（同步返回，无需轮询任务）
+	// 响应格式：output.choices[0].message.content[0].image
+	var genResp struct {
+		Output struct {
+			Choices []struct {
+				FinishReason string `json:"finish_reason"`
+				Message      struct {
+					Role    string `json:"role"`
+					Content []struct {
+						Image string `json:"image"`
+						Text  string `json:"text"`
+					} `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		} `json:"output"`
+		Usage struct {
+			ImageCount int `json:"image_count"`
+			Width      int `json:"width"`
+			Height     int `json:"height"`
+		} `json:"usage"`
+		RequestId string `json:"request_id"`
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+	}
+
+	if err := json.Unmarshal(rawBody, &genResp); err != nil {
+		return nil, fmt.Errorf("dashscope failed to parse response: %w, response: %s", err, string(rawBody))
+	}
+
+	// 检查错误响应（优先检查 code 字段）
+	if genResp.Code != "" {
+		return nil, fmt.Errorf("dashscope generation failed (code: %s): %s", genResp.Code, genResp.Message)
+	}
+
+	// 提取图像 URL
+	if len(genResp.Output.Choices) == 0 {
+		return nil, fmt.Errorf("no choices in generation response: %s", string(rawBody))
+	}
+
+	content := genResp.Output.Choices[0].Message.Content
+	if len(content) == 0 {
+		return nil, fmt.Errorf("empty content in generation response")
+	}
+
+	var imageURL string
+	for _, c := range content {
+		if c.Image != "" {
+			imageURL = c.Image
+			break
+		}
+	}
+
+	if imageURL == "" {
+		return nil, fmt.Errorf("no image URL in generation response: %s", string(rawBody))
+	}
+
+	return &spec.Response{
+		Message: spec.Message{
+			Role:    spec.RoleAssistant,
+			Content: imageURL,
+		},
+		RawResponse: rawBody,
+	}, nil
+}
+
+// handleChat 处理标准聊天请求（流式/非流式）
+func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, config *spec.RequestConfig) (*spec.Response, error) {
+	// 【修复 1】避免浅拷贝修改用户的 config.Parameters 引发的数据污染和并发 Panic
+	requestBody := make(map[string]any)
+	if config.Parameters != nil {
+		for k, v := range config.Parameters {
+			requestBody[k] = v
+		}
+	}
+
 	// 【适配逻辑】将通用的 Thinking 选项翻译为 provider 特定的参数
 	if config.Thinking != nil {
-		// 如果用户设置了Thinking选项，就将其转换为 "enable_thinking" 字段
 		requestBody["enable_thinking"] = *config.Thinking
 	}
 	requestBody["model"] = m.name
@@ -105,41 +260,34 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 		// DashScope 协议要求：设置 stream_options 以获取 Token 消耗
 		requestBody["stream_options"] = map[string]bool{"include_usage": true}
 
-		// 使用 PostStream 获取 http.Response，而不是一次性读取 Body
+		// 使用 PostStream 获取 http.Response
 		resp, err := m.client.requester.PostStream(ctx, m.client.config.APIURL, headers, requestBody)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
 
-		// 准备变量以收集完整的响应
 		var fullContent strings.Builder
-		var role string = "assistant"
+		role := "assistant"
 
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			line := scanner.Text()
-
-			// SSE 格式通常以 "data: " 开头
-			if !strings.HasPrefix(line, "data: ") {
+			// 【修复 4】兼顾带空格和不带空格的前置情况，并裁剪空白
+			if !strings.HasPrefix(line, "data:") {
 				continue
 			}
 
-			dataStr := strings.TrimPrefix(line, "data: ")
-			dataStr = strings.TrimSpace(dataStr)
-
-			// 检查结束标记
+			dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if dataStr == "[DONE]" {
 				break
 			}
 
 			var chunk dashscopeChunk
 			if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
-				// 忽略解析错误的行，或者打印日志
 				continue
 			}
 
-			// 提取 Delta Content
 			if len(chunk.Choices) > 0 {
 				delta := chunk.Choices[0].Delta
 				if delta.Role != "" {
@@ -147,36 +295,28 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 				}
 				if delta.Content != "" {
 					fullContent.WriteString(delta.Content)
-					// 触发用户回调
 					if config.StreamCallback != nil {
 						if err := config.StreamCallback(ctx, delta.Content); err != nil {
-							return nil, err // 用户要求中断
+							return nil, err
 						}
 					}
 				}
 			}
-
-			// 处理 Usage (如果有需求，可以在 Response 结构体中扩展 Usage 字段)
-			// if chunk.Usage != nil { ... }
 		}
 
 		if err := scanner.Err(); err != nil {
 			return nil, fmt.Errorf("dashscope: stream scan error: %w", err)
 		}
 
-		// 流式结束后，返回一个聚合的 Response
 		return &spec.Response{
 			Message: spec.Message{
 				Role:    spec.Role(role),
 				Content: fullContent.String(),
 			},
-			// RawResponse 在流式模式下无法完整提供，故留空或仅存最后一段
 		}, nil
 	}
 
-	// ==================== 非流式处理分支 (保持原样) ====================
-
-	// 使用配置中的APIURL
+	// ==================== 非流式处理分支 ====================
 	rawBody, err := m.client.requester.Post(ctx, m.client.config.APIURL, headers, requestBody)
 	if err != nil {
 		return nil, err
@@ -200,4 +340,125 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 		Message:     responseMessage,
 		RawResponse: rawBody,
 	}, nil
+}
+
+// Get 发起 HTTP GET 请求，返回原始响应体字节
+// 适用于轮询异步任务状态等场景
+func (m *modelImpl) Get(ctx context.Context, url string, headers http.Header) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("dashscope: failed to create GET request: %w", err)
+	}
+
+	// 设置请求头
+	for key, values := range headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+
+	// 【修复 3】防止 m.client.requester.HTTPClient 为空时发生 panic
+	client := m.client.requester.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	// 发起请求
+	resp, err := client.Do(req)
+	if err != nil {
+		// 区分上下文取消/超时 与 网络错误
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("dashscope: GET request cancelled or timed out: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("dashscope: GET request failed (url=%s): %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	// 读取响应体（带大小限制防 OOM）
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 10MB 限制
+	if err != nil {
+		return nil, fmt.Errorf("dashscope: failed to read GET response body: %w", err)
+	}
+
+	// 错误状态码处理
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// 特殊错误分类（便于调用方实现重试策略）
+		switch resp.StatusCode {
+		case http.StatusTooManyRequests: // 429
+			return nil, &RateLimitError{
+				Message:      "rate limited by DashScope API",
+				RetryAfter:   parseRetryAfter(resp.Header),
+				StatusCode:   resp.StatusCode,
+				ResponseBody: body,
+			}
+		case http.StatusServiceUnavailable, http.StatusGatewayTimeout, // 503, 504
+			http.StatusInternalServerError: // 500
+			return nil, &ServerError{
+				Message:      fmt.Sprintf("DashScope server error: %s", resp.Status),
+				StatusCode:   resp.StatusCode,
+				ResponseBody: body,
+			}
+		default:
+			return nil, fmt.Errorf(
+				"dashscope: GET request failed with status %d %s, url=%s, response=%.*s",
+				resp.StatusCode,
+				resp.Status,
+				url,
+				500, string(body), // 限制响应体输出长度，避免日志爆炸
+			)
+		}
+	}
+
+	return body, nil
+}
+
+// ==================== 辅助错误类型（便于调用方分类处理） ====================
+
+// RateLimitError 表示触发限流，包含建议的重试等待时间
+type RateLimitError struct {
+	Message      string
+	RetryAfter   time.Duration // 建议等待时间，0 表示未知
+	StatusCode   int
+	ResponseBody []byte
+}
+
+func (e *RateLimitError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("%s (retry after %v)", e.Message, e.RetryAfter)
+	}
+	return e.Message
+}
+
+// ServerError 表示服务端临时错误，通常可重试
+type ServerError struct {
+	Message      string
+	StatusCode   int
+	ResponseBody []byte
+}
+
+func (e *ServerError) Error() string {
+	return e.Message
+}
+
+// ==================== 工具函数 ====================
+
+// parseRetryAfter 解析 Retry-After 头（支持秒数或 HTTP 日期）
+func parseRetryAfter(header http.Header) time.Duration {
+	retryAfter := header.Get("Retry-After")
+	if retryAfter == "" {
+		return 0
+	}
+
+	// 尝试解析为整数秒
+	if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+
+	// 尝试解析为 HTTP 日期
+	if t, err := http.ParseTime(retryAfter); err == nil {
+		if wait := time.Until(t); wait > 0 {
+			return wait
+		}
+	}
+	return 0
 }

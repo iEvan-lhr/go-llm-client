@@ -18,6 +18,7 @@ type ClientConfig struct {
 	APIKey     string
 	APIURL     string
 	HTTPClient *http.Client
+	Text2Image bool
 }
 
 // NewClientConfig 创建一个带有默认值的客户端配置。
@@ -85,6 +86,25 @@ type RequestConfig struct {
 	Thinking *bool
 
 	Parameters map[string]any
+
+	text2Image bool
+	imageEdit  bool
+}
+
+func (r *RequestConfig) SetText2Image(text2Image bool) {
+	r.text2Image = text2Image
+}
+
+func (r *RequestConfig) IsText2Image() bool {
+	return r.text2Image
+}
+
+func (r *RequestConfig) SetImageEdit(imageEdit bool) {
+	r.imageEdit = imageEdit
+}
+
+func (r *RequestConfig) IsImageEdit() bool {
+	return r.imageEdit
 }
 
 // NewRequestConfig 创建一个带有默认值的请求配置。
@@ -161,6 +181,25 @@ func WithParameters(params map[string]any) Option {
 	}
 }
 
+// WithText2ImageParameters 附加一个map中所有的任意键值对参数。
+// 如果key已存在，则会被覆盖。
+func WithText2ImageParameters(params map[string]any) Option {
+	return func(r *RequestConfig) {
+		for k, v := range params {
+			r.Parameters[k] = v
+		}
+		r.text2Image = true
+	}
+}
+
+// WithText2Image 附加一个map中所有的任意键值对参数。
+// 如果key已存在，则会被覆盖。
+func WithText2Image() Option {
+	return func(r *RequestConfig) {
+		r.text2Image = true
+	}
+}
+
 // WithParameter 附加单个任意键值对参数。
 // 这是最灵活的选项，用于传递特定模型的专有参数。
 func WithParameter(key string, value any) Option {
@@ -189,5 +228,55 @@ func WithTranslation(sourceLang, targetLang string) Option {
 			SourceLang: sourceLang,
 			TargetLang: targetLang,
 		}
+	}
+}
+
+// ============== 新增：文生图配置结构体和选项 ==============
+
+// Text2ImageConfig 文生图专用配置
+type Text2ImageConfig struct {
+	Size           string // 图像尺寸，如 "1024*1024", "2048*2048"
+	Watermark      *bool  // 是否添加水印，nil 表示使用默认值
+	NegativePrompt string // 负面提示词
+	PromptExtend   *bool  // 是否扩展提示词，nil 表示使用默认值
+	ImageCount     int    // 生成图像数量，默认 1
+}
+
+// Text2ImageOption 文生图配置选项函数类型
+type Text2ImageOption func(*Text2ImageConfig)
+
+// WithText2ImageSize 设置图像尺寸
+// 支持的尺寸：512*512, 720*720, 1024*1024, 1664*928, 2048*2048 等
+func WithText2ImageSize(size string) Text2ImageOption {
+	return func(cfg *Text2ImageConfig) {
+		cfg.Size = size
+	}
+}
+
+// WithText2ImageWatermark 设置是否添加水印
+func WithText2ImageWatermark(enable bool) Text2ImageOption {
+	return func(cfg *Text2ImageConfig) {
+		cfg.Watermark = &enable
+	}
+}
+
+// WithText2ImageNegativePrompt 设置负面提示词
+func WithText2ImageNegativePrompt(negativePrompt string) Text2ImageOption {
+	return func(cfg *Text2ImageConfig) {
+		cfg.NegativePrompt = negativePrompt
+	}
+}
+
+// WithText2ImagePromptExtend 设置是否扩展提示词
+func WithText2ImagePromptExtend(enable bool) Text2ImageOption {
+	return func(cfg *Text2ImageConfig) {
+		cfg.PromptExtend = &enable
+	}
+}
+
+// WithText2ImageCount 设置生成图像数量
+func WithText2ImageCount(count int) Text2ImageOption {
+	return func(cfg *Text2ImageConfig) {
+		cfg.ImageCount = count
 	}
 }
