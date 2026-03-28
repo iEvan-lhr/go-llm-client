@@ -24,7 +24,7 @@ type ClientConfig struct {
 func NewClientConfig() *ClientConfig {
 	return &ClientConfig{
 		// 设置一个合理的默认HTTP客户端
-		HTTPClient: &http.Client{Timeout: 90 * time.Second},
+		HTTPClient: &http.Client{Timeout: 240 * time.Second},
 	}
 }
 
