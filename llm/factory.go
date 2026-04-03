@@ -7,6 +7,7 @@ import (
 	"github.com/iEvan-lhr/go-llm-client/providers/dashscope"
 	"github.com/iEvan-lhr/go-llm-client/providers/generic"
 	"github.com/iEvan-lhr/go-llm-client/providers/openai"
+	"github.com/iEvan-lhr/go-llm-client/providers/openrouter" // ✅ 新增包导入
 	"github.com/iEvan-lhr/go-llm-client/spec"
 )
 
@@ -54,6 +55,8 @@ func GetClient(cfg Config) (spec.Client, error) {
 		newClient, err = generic.NewClient(clientOpts...)
 	case "openai":
 		newClient, err = openai.NewClient(clientOpts...)
+	case "openrouter": // ✅ 新增 openrouter 匹配分支
+		newClient, err = openrouter.NewClient(clientOpts...)
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", cfg.Provider)
 	}
