@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -64,16 +65,42 @@ type dashscopeChunk struct {
 		Delta struct {
 			Content string `json:"content"`
 			Role    string `json:"role"`
+			// 支持获取思考过程内容（OpenAI 兼容格式下的 reasoning_content）
+			ReasoningContent string `json:"reasoning_content,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
 
-	// DashScope 特有的 Usage 字段（在最后一条消息中）
+	// 适配 Responses API 下的事件类型和字段
+	Type string `json:"type,omitempty"`
+	Item *struct {
+		Type   string `json:"type,omitempty"`
+		Goal   string `json:"goal,omitempty"`
+		Output string `json:"output,omitempty"`
+	} `json:"item,omitempty"`
+	Delta string `json:"delta,omitempty"`
+
+	// Chat Completions API 用法统计
 	Usage *struct {
 		TotalTokens  int `json:"total_tokens"`
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
+		XTools       map[string]struct {
+			Count int `json:"count"`
+		} `json:"x_tools,omitempty"`
 	} `json:"usage"`
+
+	// Responses API 完成时的用法统计
+	Response *struct {
+		Usage *struct {
+			TotalTokens  int `json:"total_tokens"`
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+			XTools       map[string]struct {
+				Count int `json:"count"`
+			} `json:"x_tools,omitempty"`
+		} `json:"usage"`
+	} `json:"response,omitempty"`
 }
 
 // Chat 实现了 llm.Model 接口的方法
@@ -231,7 +258,6 @@ func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Messag
 
 // handleChat 处理标准聊天请求（流式/非流式）
 func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, config *spec.RequestConfig) (*spec.Response, error) {
-	// 【修复 1】避免浅拷贝修改用户的 config.Parameters 引发的数据污染和并发 Panic
 	requestBody := make(map[string]any)
 	if config.Parameters != nil {
 		for k, v := range config.Parameters {
@@ -239,7 +265,6 @@ func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, con
 		}
 	}
 
-	// 【适配逻辑】将通用的 Thinking 选项翻译为 provider 特定的参数
 	if config.Thinking != nil {
 		requestBody["enable_thinking"] = *config.Thinking
 	}
@@ -257,10 +282,8 @@ func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, con
 	// ==================== 流式处理分支 ====================
 	if config.Streaming {
 		requestBody["stream"] = true
-		// DashScope 协议要求：设置 stream_options 以获取 Token 消耗
 		requestBody["stream_options"] = map[string]bool{"include_usage": true}
 
-		// 使用 PostStream 获取 http.Response
 		resp, err := m.client.requester.PostStream(ctx, m.client.config.APIURL, headers, requestBody)
 		if err != nil {
 			return nil, err
@@ -273,7 +296,6 @@ func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, con
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			line := scanner.Text()
-			// 【修复 4】兼顾带空格和不带空格的前置情况，并裁剪空白
 			if !strings.HasPrefix(line, "data:") {
 				continue
 			}
@@ -288,19 +310,48 @@ func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, con
 				continue
 			}
 
+			// 拦截输出：Responses API 的中间工具抓取过程
+			if chunk.Type == "response.output_item.done" && chunk.Item != nil && chunk.Item.Type == "web_extractor_call" {
+				log.Printf("\n[Web Extractor Action] Goal: %s\nOutput: %s\n", chunk.Item.Goal, chunk.Item.Output)
+			}
+
+			var contentToAppend string
+
+			// 解析 Chat Completions API 格式
 			if len(chunk.Choices) > 0 {
 				delta := chunk.Choices[0].Delta
 				if delta.Role != "" {
 					role = delta.Role
 				}
+				// 对于 qwen3-max，它的思考过程会从这里下发
+				if delta.ReasoningContent != "" {
+					contentToAppend += delta.ReasoningContent
+				}
 				if delta.Content != "" {
-					fullContent.WriteString(delta.Content)
-					if config.StreamCallback != nil {
-						if err := config.StreamCallback(ctx, delta.Content); err != nil {
-							return nil, err
-						}
+					contentToAppend += delta.Content
+				}
+			} else if chunk.Type == "response.output_text.delta" || chunk.Type == "response.reasoning_summary_text.delta" {
+				// 解析 Responses API 格式
+				contentToAppend = chunk.Delta
+			}
+
+			// 如果存在内容，写入 Builder 并触发 Callback
+			if contentToAppend != "" {
+				fullContent.WriteString(contentToAppend)
+				if config.StreamCallback != nil {
+					if err := config.StreamCallback(ctx, contentToAppend); err != nil {
+						return nil, err
 					}
 				}
+			}
+
+			// 拦截输出：打印工具调用次数
+			if chunk.Type == "response.completed" && chunk.Response != nil && chunk.Response.Usage != nil {
+				if len(chunk.Response.Usage.XTools) > 0 {
+					log.Printf("\n[Usage Stats] Tools: %+v", chunk.Response.Usage.XTools)
+				}
+			} else if chunk.Usage != nil && len(chunk.Usage.XTools) > 0 {
+				log.Printf("\n[Usage Stats] Tools: %+v", chunk.Usage.XTools)
 			}
 		}
 

@@ -44,6 +44,32 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	}
 
 	var opts []spec.Option
+	// 【新增】处理 WebExtractor：将工具组装到 Parameters 中，同时执行深拷贝避免污染全局配置
+	// 【核心修复】适配 Chat Completions API 的联网搜索参数
+	if cfg.WebExtractor != nil {
+		newParams := make(map[string]any)
+		if cfg.Parameters != nil {
+			for k, v := range cfg.Parameters {
+				newParams[k] = v
+			}
+		}
+
+		// 使用顶级参数 enable_search，废弃 tools 数组形式以避免 OpenAI Schema 校验报错
+		if cfg.WebExtractor.EnableSearch {
+			newParams["enable_search"] = true
+		}
+
+		if cfg.WebExtractor.EnableExtractor {
+			newParams["search_options"] = map[string]any{
+				"search_strategy": "agent_max", // 对应 curl 中的配置
+			}
+		}
+
+		// 如果官方在 Chat Completions 中需要开启代码解释器，通常也是通过特定顶级参数或特定的模型版本
+		// 这里我们先满足联网搜索和抓取的核心需求
+
+		cfg.Parameters = newParams
+	}
 	if cfg.Parameters != nil {
 		opts = append(opts, spec.WithParameters(cfg.Parameters))
 	}
