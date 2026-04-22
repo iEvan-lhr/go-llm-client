@@ -513,3 +513,42 @@ func parseRetryAfter(header http.Header) time.Duration {
 	}
 	return 0
 }
+
+// Embed 实现了 spec.Embedder 接口
+// input 可以是 string (单条文本) 或 []string (多条文本批量向量化)
+func (m *modelImpl) Embed(ctx context.Context, input any) (*spec.EmbeddingResponse, error) {
+	// 1. 构建请求体
+	requestBody := map[string]any{
+		"model": m.name,
+		"input": input,
+	}
+
+	// 2. 构建请求头
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Authorization", "Bearer "+m.client.config.APIKey)
+
+	// 3. 动态解析 Embed 端点 URL
+	// 如果用户配置的是默认的 Chat 完成端点，自动替换为 Embedding 端点
+	embedURL := "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
+	if strings.HasSuffix(m.client.config.APIURL, "/chat/completions") {
+		embedURL = strings.Replace(m.client.config.APIURL, "/chat/completions", "/embeddings", 1)
+	} else if m.client.config.APIURL != "" && !strings.Contains(m.client.config.APIURL, "chat/completions") {
+		// 如果用户配置了自定义的代理/网关域名，且不是以 chat/completions 结尾，尝试直接使用该自定义域名的基础路径
+		// 这里的逻辑可以根据你的具体架构需求微调，通常直接替换后缀是最稳妥的
+	}
+
+	// 4. 发起 HTTP POST 请求
+	rawBody, err := m.client.requester.Post(ctx, embedURL, headers, requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("dashscope embedding request failed: %w", err)
+	}
+
+	// 5. 解析并返回标准响应
+	var embedResp spec.EmbeddingResponse
+	if err := json.Unmarshal(rawBody, &embedResp); err != nil {
+		return nil, fmt.Errorf("dashscope failed to parse embedding response: %w, raw response: %s", err, string(rawBody))
+	}
+
+	return &embedResp, nil
+}

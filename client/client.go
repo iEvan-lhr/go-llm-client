@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/iEvan-lhr/go-llm-client/llm"
@@ -89,6 +90,21 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	// 直接使用结构体中保存的 client 实例，无需再次查询缓存
 	model := c.client.Model(cfg.Model)
 	return model.Chat(ctx, messages, opts...)
+}
+
+// SendEmbedding 获取文本的向量表示。
+// 参数 input 可以是一段文本 (string)，也可以是多段文本的切片 ([]string)。
+func (c *Client) SendEmbedding(ctx context.Context, input any) (*spec.EmbeddingResponse, error) {
+	// 获取底层具体的模型实例
+	model := c.client.Model(c.config.Model)
+
+	// 使用类型断言，判断当前模型提供商是否支持向量化接口
+	if embedded, ok := model.(spec.Embedded); ok {
+		return embedded.Embed(ctx, input)
+	}
+
+	// 如果断言失败，说明该 Provider 尚未实现 Embed 方法
+	return nil, fmt.Errorf("provider '%s' model '%s' does not support embeddings (Embedder interface not implemented)", c.config.Provider, c.config.Model)
 }
 
 // Send 向当前对话发送一条新消息，并返回完整的响应。
