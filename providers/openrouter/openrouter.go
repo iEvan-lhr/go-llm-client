@@ -72,6 +72,9 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 		requestBody["top_p"] = *config.TopP
 	}
 
+	if config.Provider != nil {
+		requestBody["provider"] = config.Provider
+	}
 	// 【思考模式处理】OpenRouter 官方规范：传递 include_reasoning 从而分离思考内容
 	if config.Thinking != nil {
 		if *config.Thinking {

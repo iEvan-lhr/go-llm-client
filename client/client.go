@@ -74,6 +74,9 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	if cfg.Parameters != nil {
 		opts = append(opts, spec.WithParameters(cfg.Parameters))
 	}
+	if cfg.ProviderOpts != nil {
+		opts = append(opts, spec.WithProvider(cfg.ProviderOpts))
+	}
 	if cfg.Thinking != nil {
 		opts = append(opts, spec.WithThinking(*cfg.Thinking))
 	}

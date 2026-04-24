@@ -89,6 +89,13 @@ type RequestConfig struct {
 
 	text2Image bool
 	imageEdit  bool
+	Provider   map[string]any
+}
+
+func WithProvider(provider map[string]any) Option {
+	return func(c *RequestConfig) {
+		c.Provider = provider
+	}
 }
 
 func (r *RequestConfig) SetText2Image(text2Image bool) {

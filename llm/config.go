@@ -20,6 +20,8 @@ type Config struct {
 	ImageEdit  bool
 	// 新增网页抓取配置
 	WebExtractor *WebExtractorOptions
+
+	ProviderOpts map[string]any
 }
 
 var (
