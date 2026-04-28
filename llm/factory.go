@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"github.com/iEvan-lhr/go-llm-client/providers/deepseek"
 	"sync"
 
 	"github.com/iEvan-lhr/go-llm-client/providers/dashscope"
@@ -57,6 +58,8 @@ func GetClient(cfg Config) (spec.Client, error) {
 		newClient, err = openai.NewClient(clientOpts...)
 	case "openrouter": // ✅ 新增 openrouter 匹配分支
 		newClient, err = openrouter.NewClient(clientOpts...)
+	case "deepseek":
+		newClient, err = deepseek.NewClient(clientOpts...)
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", cfg.Provider)
 	}
