@@ -87,6 +87,9 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	if cfg.StreamCallback != nil {
 		opts = append(opts, spec.WithStreamCallback(cfg.StreamCallback))
 	}
+	if cfg.ReasoningCallback != nil {
+		opts = append(opts, spec.WithReasoningCallback(cfg.ReasoningCallback))
+	}
 	if len(extraOpts) > 0 {
 		opts = append(opts, extraOpts...)
 	}

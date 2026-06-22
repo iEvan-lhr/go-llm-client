@@ -158,6 +158,11 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 				}
 				if delta.ReasoningContent != "" {
 					reasoningContent.WriteString(delta.ReasoningContent)
+					if config.ReasoningCallback != nil {
+						if err := config.ReasoningCallback(ctx, delta.ReasoningContent); err != nil {
+							return nil, err
+						}
+					}
 				}
 				if delta.Content != "" {
 					fullContent.WriteString(delta.Content)

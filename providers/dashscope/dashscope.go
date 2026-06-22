@@ -325,12 +325,26 @@ func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, con
 				}
 				// 对于 qwen3-max，它的思考过程会从这里下发
 				if delta.ReasoningContent != "" {
-					contentToAppend += delta.ReasoningContent
+					if config.ReasoningCallback != nil {
+						if err := config.ReasoningCallback(ctx, delta.ReasoningContent); err != nil {
+							return nil, err
+						}
+					} else {
+						contentToAppend += delta.ReasoningContent
+					}
 				}
 				if delta.Content != "" {
 					contentToAppend += delta.Content
 				}
-			} else if chunk.Type == "response.output_text.delta" || chunk.Type == "response.reasoning_summary_text.delta" {
+			} else if chunk.Type == "response.reasoning_summary_text.delta" {
+				if config.ReasoningCallback != nil {
+					if err := config.ReasoningCallback(ctx, chunk.Delta); err != nil {
+						return nil, err
+					}
+				} else {
+					contentToAppend = chunk.Delta
+				}
+			} else if chunk.Type == "response.output_text.delta" {
 				// 解析 Responses API 格式
 				contentToAppend = chunk.Delta
 			}

@@ -78,6 +78,9 @@ type RequestConfig struct {
 	// 【新增】StreamCallback 用于处理流式输出的每一个数据块
 	StreamCallback StreamCallback
 
+	// 【新增】ReasoningCallback 用于处理推理过程的每一个数据块
+	ReasoningCallback StreamCallback
+
 	// 【新增】Thinking 用于统一控制思考模式。
 	// 使用指针 *bool 可以区分三种状态:
 	// - nil:   用户未指定，使用Provider的默认行为。
@@ -166,6 +169,13 @@ func WithTopP(topP float32) Option {
 func WithStreaming() Option {
 	return func(r *RequestConfig) {
 		r.Streaming = true
+	}
+}
+
+// WithReasoningCallback 启用流式响应并设置推理/思考回调函数。
+func WithReasoningCallback(callback StreamCallback) Option {
+	return func(r *RequestConfig) {
+		r.ReasoningCallback = callback
 	}
 }
 

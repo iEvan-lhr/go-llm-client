@@ -14,7 +14,7 @@
 ## 📦 安装
 
 ```bash
-go get github.com/ievan-lhr/go-llm-client
+go get github.com/iEvan-lhr/go-llm-client
 
 ```
 
