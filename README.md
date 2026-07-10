@@ -208,6 +208,10 @@ func main() {
 | **`SendText2Image`** | 发送提示词，触发 **文生图** 任务 | AI 画图、视觉生成 (返回图片URL) |
 | **`SendNoHistory`** | 发送消息，**携带**历史但不记录本次 | 基于上下文的临时追问 |
 | **`SendStreamNoHistory`** | 发送消息，**不携带**且不记录历史 | 独立的一次性任务 (如翻译/搜索) |
+| **`SendOCR`** | 传入文件 Part，发送 OCR 识别请求 | 细粒度控制的多模态文件 OCR |
+| **`SendOCRURL`** | 传入公网 URL，发送 OCR 识别请求 | 快速公网文档 OCR 解析 |
+| **`SendOCRLocal`** | 传入本地路径，自动编码并发送 OCR 请求 | 快速本地文档 OCR 解析 (自动 Base64) |
+| **`SendOCRBytes`** | 传入二进制字节流 `[]byte`，发送 OCR 请求 | 内存/流式二进制文档 OCR 解析 |
 | **`ResetHistory`** | 清空对话历史 | 重置会话 |
 
 ### `llm.Config` 配置项

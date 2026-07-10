@@ -266,6 +266,46 @@ func (c *Client) SendPartsNoHistory(ctx context.Context, parts ...spec.ContentPa
 	return c.invoke(ctx, messages, nil)
 }
 
+// SendOCR 发送 OCR 请求，传入文件 Part（支持 URL 或本地文件编码）并指定任务参数。
+// task 常见取值有 "document_parsing", "advanced_recognition", "table_parsing", "key_information_extraction"
+// 如果有额外的任务配置（如 key_information_extraction 的 result_schema），可通过额外参数传入，如 SendOCR(ctx, part, "document_parsing", taskConfigMap)
+func (c *Client) SendOCR(ctx context.Context, part spec.ContentPart, task string, taskConfig ...map[string]any) (*spec.Response, error) {
+	ocrOptions := map[string]any{
+		"task": task,
+	}
+	if len(taskConfig) > 0 && taskConfig[0] != nil {
+		ocrOptions["task_config"] = taskConfig[0]
+	}
+
+	var messages []spec.Message
+	if c.config.SystemPrompt != "" {
+		messages = append(messages, spec.NewSystemMessage(c.config.SystemPrompt))
+	}
+	messages = append(messages, spec.NewUserPartsMessage(part))
+
+	return c.invoke(ctx, messages, nil, spec.WithParameter("ocr_options", ocrOptions))
+}
+
+// SendOCRURL 快速发送公网文件 URL 进行 OCR 识别。
+func (c *Client) SendOCRURL(ctx context.Context, url string, task string, taskConfig ...map[string]any) (*spec.Response, error) {
+	return c.SendOCR(ctx, spec.NewInputFilePart(url), task, taskConfig...)
+}
+
+// SendOCRLocal 快速发送本地文件路径进行 OCR 识别，内部会自动进行 Base64 编码。
+func (c *Client) SendOCRLocal(ctx context.Context, path string, mimeType string, task string, taskConfig ...map[string]any) (*spec.Response, error) {
+	part, err := spec.NewInputFileLocalPart(path, mimeType)
+	if err != nil {
+		return nil, err
+	}
+	return c.SendOCR(ctx, part, task, taskConfig...)
+}
+
+// SendOCRBytes 快速发送内存中的文件二进制数据 ([]byte) 进行 OCR 识别。
+func (c *Client) SendOCRBytes(ctx context.Context, data []byte, mimeType string, task string, taskConfig ...map[string]any) (*spec.Response, error) {
+	part := spec.NewInputFileBytesPart(mimeType, data)
+	return c.SendOCR(ctx, part, task, taskConfig...)
+}
+
 // SendStreamNoHistory 执行一次性的流式对话。
 // 特点：
 // 1. 不携带之前的对话历史 (Clean Context)。
