@@ -132,6 +132,71 @@ func main() {
 
 ```
 
+## 🔍 文档/多模态 OCR 与本地文件上传 (New 🚀)
+
+库提供了对阿里云百炼的 `qwen3.5-ocr` 模型及其专用 Responses API 的完整封装，支持传入公网 URL 或直接加载并上传本地 PDF、图像文件，同时提供了完备的强类型版面分析/键值抽取结果结构体。
+
+### 1. 支持的文件传入方式
+通过 `spec` 提供的构建函数，您可以非常方便地传递各种文件输入：
+* **公网 URL 文件**: `spec.NewInputFilePart("https://example.com/doc.pdf")`
+* **本地路径文件**: `spec.NewInputFileLocalPart("path/to/doc.pdf", "application/pdf")` （自动进行 Base64 编码并组合为 Data URI）
+* **内存二进制数据**: `spec.NewInputFileBytesPart("application/pdf", data)`
+
+### 2. 调用示例
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/iEvan-lhr/go-llm-client/client"
+	"github.com/iEvan-lhr/go-llm-client/llm"
+	"github.com/iEvan-lhr/go-llm-client/spec"
+)
+
+func main() {
+	c, err := client.New(llm.Config{
+		Provider: "dashscope",
+		Model:    "qwen3.5-ocr", // 使用 OCR 模型
+		APIKey:   os.Getenv("DASHSCOPE_API_KEY"),
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	// 1. 读取本地 PDF 文件
+	localPart, err := spec.NewInputFileLocalPart("testing.pdf", "application/pdf")
+	if err != nil {
+		panic(err)
+	}
+
+	// 2. 调用并指定 OCR 任务参数 (如 document_parsing 或 advanced_recognition)
+	resp, err := c.SendPartsNoHistory(
+		context.Background(),
+		localPart,
+		spec.WithParameter("ocr_options", map[string]any{"task": "document_parsing"}),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	// 3. 提取 Markdown 格式的文本内容
+	fmt.Println("=== 解析结果 ===")
+	fmt.Println(resp.Message.Content)
+
+	// 4. 获取详细的结构化布局与样式元数据
+	if resp.OCRResult != nil {
+		fmt.Printf("解析到 %d 个版面块\n", len(resp.OCRResult.Layouts))
+		for _, layout := range resp.OCRResult.Layouts {
+			fmt.Printf("[%s] (第 %d 页): %s\n", layout.Type, layout.PageNum, layout.Text)
+		}
+	}
+}
+```
+
 ## 📚 API 方法速查
 
 ### `client.Client` 方法

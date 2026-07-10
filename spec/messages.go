@@ -51,6 +51,7 @@ type ContentPart struct {
 	Type     string    `json:"type"`
 	Text     string    `json:"text,omitempty"`
 	ImageURL *ImageURL `json:"image_url,omitempty"`
+	FileURL  string    `json:"file_url,omitempty"`
 }
 
 func (m *Message) MarshalJSON() ([]byte, error) {
@@ -124,6 +125,32 @@ func NewImageURLPart(url string) ContentPart {
 			URL: url,
 		},
 	}
+}
+
+func NewInputFilePart(url string) ContentPart {
+	return ContentPart{
+		Type:    "input_file",
+		FileURL: url,
+	}
+}
+
+func NewInputFileBase64Part(mimeType, base64Data string) ContentPart {
+	return ContentPart{
+		Type:    "input_file",
+		FileURL: fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data),
+	}
+}
+
+func NewInputFileBytesPart(mimeType string, data []byte) ContentPart {
+	return NewInputFileBase64Part(mimeType, base64.StdEncoding.EncodeToString(data))
+}
+
+func NewInputFileLocalPart(path, mimeType string) (ContentPart, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ContentPart{}, err
+	}
+	return NewInputFileBytesPart(mimeType, data), nil
 }
 
 func NewImageURLPartWithDetail(url, detail string) ContentPart {

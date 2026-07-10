@@ -118,6 +118,9 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 		// 预留 ImageEdit 实现位置（根据 DashScope API 文档后续扩展）
 		return nil, fmt.Errorf("image edit is not supported yet for model %s", m.name)
 
+	case m.name == "qwen3.5-ocr" || strings.Contains(m.name, "-ocr"):
+		return m.handleOCR(ctx, messages, config)
+
 	default:
 		return m.handleChat(ctx, messages, config)
 	}
@@ -565,4 +568,150 @@ func (m *modelImpl) Embed(ctx context.Context, input any) (*spec.EmbeddingRespon
 	}
 
 	return &embedResp, nil
+}
+
+// handleOCR 处理 OCR 模型的调用流程，使用百炼 Responses API
+func (m *modelImpl) handleOCR(ctx context.Context, messages []spec.Message, config *spec.RequestConfig) (*spec.Response, error) {
+	requestBody := make(map[string]any)
+	if config.Parameters != nil {
+		for k, v := range config.Parameters {
+			requestBody[k] = v
+		}
+	}
+
+	if config.Thinking != nil {
+		requestBody["enable_thinking"] = *config.Thinking
+	}
+	requestBody["model"] = m.name
+	requestBody["input"] = messages
+
+	if config.Temperature != nil {
+		requestBody["temperature"] = *config.Temperature
+	}
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Authorization", "Bearer "+m.client.config.APIKey)
+
+	// 动态解析 Responses 接口端点
+	apiURL := m.client.config.APIURL
+	if strings.HasSuffix(apiURL, "/chat/completions") {
+		apiURL = strings.Replace(apiURL, "/chat/completions", "/responses", 1)
+	} else if strings.HasSuffix(apiURL, "/compatible-mode/v1") {
+		apiURL = apiURL + "/responses"
+	} else if strings.HasSuffix(apiURL, "/compatible-mode/v1/") {
+		apiURL = apiURL + "responses"
+	}
+
+	// ==================== 流式处理分支 ====================
+	if config.Streaming {
+		requestBody["stream"] = true
+		requestBody["stream_options"] = map[string]bool{"include_usage": true}
+
+		resp, err := m.client.requester.PostStream(ctx, apiURL, headers, requestBody)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+
+		var fullContent strings.Builder
+		role := "assistant"
+
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+
+			dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if dataStr == "[DONE]" {
+				break
+			}
+
+			var chunk dashscopeChunk
+			if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
+				continue
+			}
+
+			var contentToAppend string
+			if chunk.Type == "response.output_text.delta" {
+				contentToAppend = chunk.Delta
+			}
+
+			if contentToAppend != "" {
+				fullContent.WriteString(contentToAppend)
+				if config.StreamCallback != nil {
+					if err := config.StreamCallback(ctx, contentToAppend); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			return nil, fmt.Errorf("dashscope: stream scan error: %w", err)
+		}
+
+		return &spec.Response{
+			Message: spec.Message{
+				Role:    spec.Role(role),
+				Content: fullContent.String(),
+			},
+		}, nil
+	}
+
+	// ==================== 非流式处理分支 ====================
+	rawBody, err := m.client.requester.Post(ctx, apiURL, headers, requestBody)
+	if err != nil {
+		return nil, err
+	}
+
+	var responsesResp struct {
+		OutputText string `json:"output_text"`
+		Output     []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type      string          `json:"type"`
+				Text      string          `json:"text"`
+				OcrResult *spec.OCRResult `json:"ocr_result"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(rawBody, &responsesResp); err != nil {
+		return nil, fmt.Errorf("dashscope: failed to unmarshal responses response: %w, raw response: %s", err, string(rawBody))
+	}
+
+	var ocrResult *spec.OCRResult
+	for _, out := range responsesResp.Output {
+		for _, part := range out.Content {
+			if part.OcrResult != nil {
+				ocrResult = part.OcrResult
+			}
+		}
+	}
+
+	content := responsesResp.OutputText
+	if content == "" {
+		for _, out := range responsesResp.Output {
+			for _, part := range out.Content {
+				if part.Text != "" {
+					content = part.Text
+					break
+				}
+			}
+			if content != "" {
+				break
+			}
+		}
+	}
+
+	return &spec.Response{
+		Message: spec.Message{
+			Role:    spec.RoleAssistant,
+			Content: content,
+		},
+		RawResponse: rawBody,
+		OCRResult:   ocrResult,
+	}, nil
 }
