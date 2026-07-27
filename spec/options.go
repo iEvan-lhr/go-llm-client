@@ -67,6 +67,20 @@ type StreamCallback func(ctx context.Context, chunk string) error
 
 var DefaultTemperature = 0.2
 
+// ReasoningEffort controls how much reasoning work a supported model performs.
+// Supported values depend on the selected model; custom values remain possible
+// by converting a string to ReasoningEffort.
+type ReasoningEffort string
+
+const (
+	ReasoningEffortNone    ReasoningEffort = "none"
+	ReasoningEffortMinimal ReasoningEffort = "minimal"
+	ReasoningEffortLow     ReasoningEffort = "low"
+	ReasoningEffortMedium  ReasoningEffort = "medium"
+	ReasoningEffortHigh    ReasoningEffort = "high"
+	ReasoningEffortXHigh   ReasoningEffort = "xhigh"
+)
+
 // RequestConfig 存储了单次请求的所有配置。
 type RequestConfig struct {
 	Model       string
@@ -87,6 +101,9 @@ type RequestConfig struct {
 	// - true:  用户明确要求开启思考模式。
 	// - false: 用户明确要求关闭思考模式。
 	Thinking *bool
+
+	// ReasoningEffort 设置支持推理等级的模型所使用的思考强度。
+	ReasoningEffort ReasoningEffort
 
 	Parameters map[string]any
 
@@ -131,6 +148,13 @@ func NewRequestConfig() *RequestConfig {
 func WithThinking(enabled bool) Option {
 	return func(r *RequestConfig) {
 		r.Thinking = &enabled
+	}
+}
+
+// WithReasoningEffort sets the reasoning level for supported models.
+func WithReasoningEffort(effort ReasoningEffort) Option {
+	return func(r *RequestConfig) {
+		r.ReasoningEffort = effort
 	}
 }
 

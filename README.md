@@ -132,6 +132,42 @@ func main() {
 
 ```
 
+## OpenAI Responses API（文本、图片与流式输出）
+
+`openai` provider 会根据接口路径自动选择协议：`/chat/completions` 继续使用原有 Chat Completions 格式，`/responses` 使用 OpenAI Responses 格式。下面的配置会向 `POST https://www.poke2api.com/v1/responses` 发送请求：
+
+```go
+c, err := client.New(llm.Config{
+	Provider: "openai",
+	Model:    "gpt-4o",
+	APIKey:   os.Getenv("OPENAI_API_KEY"),
+	APIURL:   "https://www.poke2api.com/v1/responses",
+	// 可选：none、minimal、low、medium、high、xhigh；具体可用等级由模型决定。
+	ReasoningEffort: llm.ReasoningEffortHigh,
+})
+if err != nil {
+	panic(err)
+}
+
+// 文本
+resp, err := c.SendNoHistory(context.Background(), "用一句话介绍 Go")
+
+// 图片理解（也支持 data:image/...;base64 URL）
+resp, err = c.SendPartsNoHistory(
+	context.Background(),
+	spec.NewImageURLPartWithDetail("https://example.com/image.jpg", "high"),
+	spec.NewTextPart("描述这张图片"),
+)
+
+// 流式文本输出
+resp, err = c.SendStreamNoHistory(context.Background(), "写一首短诗", func(_ context.Context, chunk string) error {
+	fmt.Print(chunk)
+	return nil
+})
+```
+
+图片流式理解可使用 `SendStreamParts`；最终完整文本仍会写入 `resp.Message.Content`。`llm.Config.Parameters` 会原样透传 Responses API 的扩展参数，`max_tokens` 会自动转换为 Responses 对应的 `max_output_tokens`。
+
 ## 🔍 文档/多模态 OCR 与本地文件上传 (New 🚀)
 
 库提供了对阿里云百炼的 `qwen3.5-ocr` 模型及其专用 Responses API 的完整封装，支持传入公网 URL 或直接加载并上传本地 PDF、图像文件，同时提供了完备的强类型版面分析/键值抽取结果结构体。
@@ -223,6 +259,7 @@ func main() {
 | `APIKey` | API 密钥 |
 | `APIURL` | (可选) 自定义接口地址，用于代理或私有部署 |
 | `Thinking` | (可选) `llm.Thinking()` 开启思考模式适配 |
+| `ReasoningEffort` | (可选) 思考等级，如 `llm.ReasoningEffortLow`、`llm.ReasoningEffortMedium`、`llm.ReasoningEffortHigh` |
 | `SystemPrompt` | (可选) 系统预设人设 |
 
 ## 💡 高级用法
@@ -236,7 +273,8 @@ c, _ := client.New(llm.Config{
     Provider: "generic", // 或 dashscope
     Model:    "deepseek-r1",
     APIKey:   "...",
-    Thinking: llm.Thinking(), // 开启思考模式适配
+    Thinking:        llm.Thinking(),           // 开启思考模式适配
+    ReasoningEffort: llm.ReasoningEffortHigh, // 设置思考等级
 })
 
 ```

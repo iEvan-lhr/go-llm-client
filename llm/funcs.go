@@ -20,6 +20,9 @@ func ChatMessages(ctx context.Context, messages []spec.Message, cfg Config) (*sp
 	if cfg.Thinking != nil {
 		opts = append(opts, spec.WithThinking(*cfg.Thinking))
 	}
+	if cfg.ReasoningEffort != "" {
+		opts = append(opts, spec.WithReasoningEffort(cfg.ReasoningEffort))
+	}
 	if cfg.StreamCallback != nil {
 		opts = append(opts, spec.WithStreamCallback(cfg.StreamCallback))
 	}
