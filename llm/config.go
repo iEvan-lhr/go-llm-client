@@ -26,12 +26,18 @@ type Config struct {
 	// ReasoningEffortLow, ReasoningEffortMedium, or ReasoningEffortHigh.
 	ReasoningEffort ReasoningEffort
 	Parameters      map[string]any
+	// Responses API fields for stateful or non-message calls.
+	ResponseInput      any
+	Instructions       any
+	PreviousResponseID string
 	//add
 	Translation *spec.TranslationOptions
 	// StreamCallback 用于接收流式数据的回调函数
 	StreamCallback spec.StreamCallback
 	// ReasoningCallback 用于接收思考过程流式数据的回调函数
 	ReasoningCallback spec.StreamCallback
+	// EventCallback receives every raw Responses event or Chat stream chunk.
+	EventCallback spec.EventCallback
 	// 图片相关操作
 	Text2Image bool
 	ImageEdit  bool

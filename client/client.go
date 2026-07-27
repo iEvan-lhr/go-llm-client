@@ -83,6 +83,15 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	if cfg.ReasoningEffort != "" {
 		opts = append(opts, spec.WithReasoningEffort(cfg.ReasoningEffort))
 	}
+	if cfg.ResponseInput != nil {
+		opts = append(opts, spec.WithResponseInput(cfg.ResponseInput))
+	}
+	if cfg.Instructions != nil {
+		opts = append(opts, spec.WithInstructions(cfg.Instructions))
+	}
+	if cfg.PreviousResponseID != "" {
+		opts = append(opts, spec.WithPreviousResponseID(cfg.PreviousResponseID))
+	}
 	// 【新增】处理 Translation 配置
 	if cfg.Translation != nil {
 		opts = append(opts, spec.WithTranslation(cfg.Translation.SourceLang, cfg.Translation.TargetLang))
@@ -93,12 +102,35 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	if cfg.ReasoningCallback != nil {
 		opts = append(opts, spec.WithReasoningCallback(cfg.ReasoningCallback))
 	}
+	if cfg.EventCallback != nil {
+		opts = append(opts, spec.WithEventCallback(cfg.EventCallback))
+	}
 	if len(extraOpts) > 0 {
 		opts = append(opts, extraOpts...)
 	}
 	// 直接使用结构体中保存的 client 实例，无需再次查询缓存
 	model := c.client.Model(cfg.Model)
 	return model.Chat(ctx, messages, opts...)
+}
+
+// SendResponse sends a direct Responses API input without modifying chat
+// history. The configured endpoint must end in /responses.
+func (c *Client) SendResponse(ctx context.Context, input any, opts ...spec.Option) (*spec.Response, error) {
+	extraOpts := make([]spec.Option, 0, len(opts)+2)
+	extraOpts = append(extraOpts, spec.WithResponseInput(input))
+	if c.config.Instructions == nil && c.config.SystemPrompt != "" {
+		extraOpts = append(extraOpts, spec.WithInstructions(c.config.SystemPrompt))
+	}
+	extraOpts = append(extraOpts, opts...)
+	return c.invoke(ctx, nil, nil, extraOpts...)
+}
+
+// ContinueResponse continues a stateful Responses API conversation.
+func (c *Client) ContinueResponse(ctx context.Context, previousResponseID string, input any, opts ...spec.Option) (*spec.Response, error) {
+	extraOpts := make([]spec.Option, 0, len(opts)+1)
+	extraOpts = append(extraOpts, spec.WithPreviousResponseID(previousResponseID))
+	extraOpts = append(extraOpts, opts...)
+	return c.SendResponse(ctx, input, extraOpts...)
 }
 
 // SendEmbedding 获取文本的向量表示。

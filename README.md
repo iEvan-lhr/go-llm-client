@@ -132,14 +132,14 @@ func main() {
 
 ```
 
-## OpenAI Responses API（文本、图片与流式输出）
+## OpenAI Chat Completions 与 Responses API
 
 `openai` provider 会根据接口路径自动选择协议：`/chat/completions` 继续使用原有 Chat Completions 格式，`/responses` 使用 OpenAI Responses 格式。下面的配置会向 `POST https://www.poke2api.com/v1/responses` 发送请求：
 
 ```go
 c, err := client.New(llm.Config{
 	Provider: "openai",
-	Model:    "gpt-4o",
+	Model:    "gpt-5.6-sol",
 	APIKey:   os.Getenv("OPENAI_API_KEY"),
 	APIURL:   "https://www.poke2api.com/v1/responses",
 	// 可选：none、minimal、low、medium、high、xhigh；具体可用等级由模型决定。
@@ -151,6 +151,8 @@ if err != nil {
 
 // 文本
 resp, err := c.SendNoHistory(context.Background(), "用一句话介绍 Go")
+fmt.Println(resp.Message.Content)
+fmt.Println(resp.ID, resp.Status, resp.Usage)
 
 // 图片理解（也支持 data:image/...;base64 URL）
 resp, err = c.SendPartsNoHistory(
@@ -166,7 +168,89 @@ resp, err = c.SendStreamNoHistory(context.Background(), "写一首短诗", func(
 })
 ```
 
-图片流式理解可使用 `SendStreamParts`；最终完整文本仍会写入 `resp.Message.Content`。`llm.Config.Parameters` 会原样透传 Responses API 的扩展参数，`max_tokens` 会自动转换为 Responses 对应的 `max_output_tokens`。
+图片流式理解可使用 `SendStreamParts`；最终完整文本仍会写入 `resp.Message.Content`。协议级完整结果分别位于 `resp.ChatCompletion` 和 `resp.Responses`。非流式原始 JSON 位于 `resp.RawResponse`；流式原始 chunk/事件位于 `StreamEvent.Raw`。
+
+### Responses 连续对话
+
+`SendResponse` 直接接受 Responses API 的 `input`。`ContinueResponse` 会发送 `previous_response_id`，不会重复发送本地聊天历史：
+
+```go
+first, err := c.SendResponse(ctx, "我叫小明")
+if err != nil {
+	return err
+}
+
+next, err := c.ContinueResponse(ctx, first.ID, "我叫什么？")
+```
+
+也可以通过配置或单次 Option 显式设置：
+
+```go
+resp, err := c.SendResponse(
+	ctx,
+	"解释一下 RAG",
+	spec.WithInstructions("你是一个助手"),
+	spec.WithPreviousResponseID("resp_xxxxx"),
+)
+```
+
+### Function Calling
+
+请求中的 `tools`、`tool_choice`、`parallel_tool_calls` 等字段可通过 `Parameters` 或 `spec.WithParameter` 透传。返回的函数调用会同时保留在 `resp.Responses.Output` 中，并转换到 `resp.Message.ToolCalls` 方便统一处理：
+
+```go
+resp, err := c.SendResponse(
+	ctx,
+	"上海天气如何？",
+	spec.WithParameter("tools", []map[string]any{{
+		"type": "function",
+		"name": "get_weather",
+		"description": "查询城市天气",
+		"parameters": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"city": map[string]any{"type": "string"},
+			},
+			"required": []string{"city"},
+		},
+	}}),
+)
+
+call := resp.Message.ToolCalls[0]
+toolResult := `{"temperature":30,"condition":"sunny"}`
+resp, err = c.ContinueResponse(
+	ctx,
+	resp.ID,
+	[]spec.ResponseInputItem{
+		spec.NewFunctionCallOutput(call.ID, toolResult),
+	},
+)
+```
+
+Chat Completions 的工具结果可用 `spec.NewToolMessage(toolCallID, content)` 追加到 `messages`。
+
+### 完整流式事件
+
+`StreamCallback` 只接收最终文本增量；`ReasoningCallback` 接收推理摘要增量；`EventCallback` 会收到每一个原始 SSE 事件，包括 output item、函数参数、MCP/hosted tool 和完成事件：
+
+```go
+resp, err := c.SendResponse(
+	ctx,
+	"完成这个任务",
+	spec.WithStreamCallback(func(_ context.Context, delta string) error {
+		fmt.Print(delta)
+		return nil
+	}),
+	spec.WithEventCallback(func(_ context.Context, event spec.StreamEvent) error {
+		log.Printf("event=%s raw=%s", event.Type, event.Raw)
+		return nil
+	}),
+)
+```
+
+`llm.Config.Parameters` 会原样透传两种 API 的扩展参数；Responses 模式下 `max_tokens` 会自动转换为 `max_output_tokens`。未知的新 output item 或事件不会丢失，可从 `RawResponse` 或 `StreamEvent.Raw` 读取。
+
+> `poke2api.com` 是第三方兼容服务。客户端支持上述 OpenAI 协议结构，不代表第三方服务一定实现 `previous_response_id`、MCP、hosted tools、文件或全部事件类型，请以该服务的实际响应为准。
 
 ## 🔍 文档/多模态 OCR 与本地文件上传 (New 🚀)
 

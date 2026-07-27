@@ -7,8 +7,18 @@ type Response struct {
 	// Message 是模型返回的核心消息内容
 	Message Message
 
-	// Usage 包含了本次调用的token使用情况等元数据 (可选, 未来可扩展)
-	// Usage UsageStats
+	// Protocol identifies whether Chat Completions or Responses was used.
+	Protocol Protocol
+
+	// ID, Model, Status, and Usage expose common protocol metadata.
+	ID     string
+	Model  string
+	Status string
+	Usage  *Usage
+
+	// ChatCompletion and Responses preserve each protocol's typed envelope.
+	ChatCompletion *ChatCompletionResponse
+	Responses      *ResponsesAPIResponse
 
 	// RawResponse 存储了来自API的原始、未经修改的http响应体
 	RawResponse []byte

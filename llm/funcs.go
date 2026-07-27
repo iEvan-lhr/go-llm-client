@@ -23,8 +23,23 @@ func ChatMessages(ctx context.Context, messages []spec.Message, cfg Config) (*sp
 	if cfg.ReasoningEffort != "" {
 		opts = append(opts, spec.WithReasoningEffort(cfg.ReasoningEffort))
 	}
+	if cfg.ResponseInput != nil {
+		opts = append(opts, spec.WithResponseInput(cfg.ResponseInput))
+	}
+	if cfg.Instructions != nil {
+		opts = append(opts, spec.WithInstructions(cfg.Instructions))
+	}
+	if cfg.PreviousResponseID != "" {
+		opts = append(opts, spec.WithPreviousResponseID(cfg.PreviousResponseID))
+	}
 	if cfg.StreamCallback != nil {
 		opts = append(opts, spec.WithStreamCallback(cfg.StreamCallback))
+	}
+	if cfg.ReasoningCallback != nil {
+		opts = append(opts, spec.WithReasoningCallback(cfg.ReasoningCallback))
+	}
+	if cfg.EventCallback != nil {
+		opts = append(opts, spec.WithEventCallback(cfg.EventCallback))
 	}
 
 	model := client.Model(cfg.Model)

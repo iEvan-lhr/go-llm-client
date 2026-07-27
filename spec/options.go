@@ -107,6 +107,12 @@ type RequestConfig struct {
 
 	Parameters map[string]any
 
+	// Responses API request fields that cannot be represented as chat messages.
+	ResponseInput      any
+	Instructions       any
+	PreviousResponseID string
+	EventCallback      EventCallback
+
 	text2Image bool
 	imageEdit  bool
 	Provider   map[string]any
@@ -199,6 +205,7 @@ func WithStreaming() Option {
 // WithReasoningCallback 启用流式响应并设置推理/思考回调函数。
 func WithReasoningCallback(callback StreamCallback) Option {
 	return func(r *RequestConfig) {
+		r.Streaming = true
 		r.ReasoningCallback = callback
 	}
 }
@@ -209,6 +216,36 @@ func WithStreamCallback(callback StreamCallback) Option {
 	return func(r *RequestConfig) {
 		r.Streaming = true
 		r.StreamCallback = callback
+	}
+}
+
+// WithEventCallback enables streaming and exposes every raw protocol event.
+func WithEventCallback(callback EventCallback) Option {
+	return func(r *RequestConfig) {
+		r.Streaming = true
+		r.EventCallback = callback
+	}
+}
+
+// WithResponseInput sets the Responses API input directly. It is useful for
+// function_call_output and other non-message input items.
+func WithResponseInput(input any) Option {
+	return func(r *RequestConfig) {
+		r.ResponseInput = input
+	}
+}
+
+// WithInstructions sets the Responses API instructions field.
+func WithInstructions(instructions any) Option {
+	return func(r *RequestConfig) {
+		r.Instructions = instructions
+	}
+}
+
+// WithPreviousResponseID continues a stateful Responses API conversation.
+func WithPreviousResponseID(id string) Option {
+	return func(r *RequestConfig) {
+		r.PreviousResponseID = id
 	}
 }
 
