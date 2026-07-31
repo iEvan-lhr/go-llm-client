@@ -104,6 +104,107 @@ type ResponseOutputItem struct {
 	Output    json.RawMessage         `json:"output,omitempty"`
 	Action    json.RawMessage         `json:"action,omitempty"`
 	Result    json.RawMessage         `json:"result,omitempty"`
+	Results   json.RawMessage         `json:"results,omitempty"`
+}
+
+const (
+	WebSearchContextSizeLow    = "low"
+	WebSearchContextSizeMedium = "medium"
+	WebSearchContextSizeHigh   = "high"
+
+	WebSearchReturnTokenBudgetDefault   = "default"
+	WebSearchReturnTokenBudgetUnlimited = "unlimited"
+)
+
+// WebSearchConfig configures OpenAI's hosted web_search tool. It is supported
+// only by the Responses API; provider-specific fields can still be supplied
+// through WithParameter.
+type WebSearchConfig struct {
+	SearchContextSize  string
+	ReturnTokenBudget  string
+	ExternalWebAccess  *bool
+	Filters            *WebSearchFilters
+	UserLocation       *WebSearchUserLocation
+	SearchContentTypes []string
+	ImageSettings      *WebSearchImageSettings
+	IncludeSources     bool
+	IncludeResults     bool
+	ToolChoice         any
+}
+
+// WebSearchFilters limits or excludes domains. Domains should not include a
+// URL scheme.
+type WebSearchFilters struct {
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
+}
+
+// WebSearchUserLocation supplies an approximate location for local results.
+// Type defaults to "approximate" when omitted.
+type WebSearchUserLocation struct {
+	Type     string `json:"type,omitempty"`
+	Country  string `json:"country,omitempty"`
+	City     string `json:"city,omitempty"`
+	Region   string `json:"region,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
+}
+
+// WebSearchImageSettings controls image results when SearchContentTypes
+// contains "image".
+type WebSearchImageSettings struct {
+	MaxResults int  `json:"max_results,omitempty"`
+	Caption    bool `json:"caption,omitempty"`
+}
+
+// Bool returns a pointer suitable for optional boolean request fields.
+func Bool(value bool) *bool {
+	return &value
+}
+
+// URLCitation identifies a source cited by an output_text part.
+type URLCitation struct {
+	Type       string `json:"type,omitempty"`
+	StartIndex int    `json:"start_index,omitempty"`
+	EndIndex   int    `json:"end_index,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Title      string `json:"title,omitempty"`
+}
+
+// WebSearchSource is a source consulted by a web search action.
+type WebSearchSource struct {
+	Type  string `json:"type,omitempty"`
+	URL   string `json:"url,omitempty"`
+	Title string `json:"title,omitempty"`
+}
+
+// WebSearchAction describes a search, page open, or in-page find action.
+type WebSearchAction struct {
+	Type    string            `json:"type,omitempty"`
+	Query   string            `json:"query,omitempty"`
+	Queries []string          `json:"queries,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Pattern string            `json:"pattern,omitempty"`
+	Sources []WebSearchSource `json:"sources,omitempty"`
+}
+
+// WebSearchResult exposes optional raw search results, including image
+// results requested through web_search_call.results.
+type WebSearchResult struct {
+	Type             string `json:"type,omitempty"`
+	URL              string `json:"url,omitempty"`
+	Title            string `json:"title,omitempty"`
+	ImageURL         string `json:"image_url,omitempty"`
+	ThumbnailURL     string `json:"thumbnail_url,omitempty"`
+	SourceWebsiteURL string `json:"source_website_url,omitempty"`
+	Caption          string `json:"caption,omitempty"`
+}
+
+// WebSearchCall is the typed view of a Responses web_search_call output item.
+type WebSearchCall struct {
+	ID      string            `json:"id,omitempty"`
+	Status  string            `json:"status,omitempty"`
+	Action  WebSearchAction   `json:"action,omitempty"`
+	Results []WebSearchResult `json:"results,omitempty"`
 }
 
 // IncompleteDetails explains why a Responses request ended incomplete.

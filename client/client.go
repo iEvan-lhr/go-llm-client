@@ -92,6 +92,9 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	if cfg.PreviousResponseID != "" {
 		opts = append(opts, spec.WithPreviousResponseID(cfg.PreviousResponseID))
 	}
+	if cfg.WebSearch != nil {
+		opts = append(opts, spec.WithWebSearch(*cfg.WebSearch))
+	}
 	// 【新增】处理 Translation 配置
 	if cfg.Translation != nil {
 		opts = append(opts, spec.WithTranslation(cfg.Translation.SourceLang, cfg.Translation.TargetLang))
@@ -123,6 +126,15 @@ func (c *Client) SendResponse(ctx context.Context, input any, opts ...spec.Optio
 	}
 	extraOpts = append(extraOpts, opts...)
 	return c.invoke(ctx, nil, nil, extraOpts...)
+}
+
+// SendWebSearch sends a Responses API request with OpenAI's hosted web_search
+// tool enabled. The configured endpoint must end in /responses.
+func (c *Client) SendWebSearch(ctx context.Context, input any, config spec.WebSearchConfig, opts ...spec.Option) (*spec.Response, error) {
+	extraOpts := make([]spec.Option, 0, len(opts)+1)
+	extraOpts = append(extraOpts, spec.WithWebSearch(config))
+	extraOpts = append(extraOpts, opts...)
+	return c.SendResponse(ctx, input, extraOpts...)
 }
 
 // ContinueResponse continues a stateful Responses API conversation.

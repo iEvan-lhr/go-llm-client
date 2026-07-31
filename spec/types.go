@@ -20,6 +20,12 @@ type Response struct {
 	ChatCompletion *ChatCompletionResponse
 	Responses      *ResponsesAPIResponse
 
+	// WebSearchCalls and Citations provide typed access to Responses web
+	// search metadata while the complete wire response remains available in
+	// Responses and RawResponse.
+	WebSearchCalls []WebSearchCall
+	Citations      []URLCitation
+
 	// RawResponse 存储了来自API的原始、未经修改的http响应体
 	RawResponse []byte
 

@@ -170,6 +170,43 @@ resp, err = c.SendStreamNoHistory(context.Background(), "写一首短诗", func(
 
 图片流式理解可使用 `SendStreamParts`；最终完整文本仍会写入 `resp.Message.Content`。协议级完整结果分别位于 `resp.ChatCompletion` 和 `resp.Responses`。非流式原始 JSON 位于 `resp.RawResponse`；流式原始 chunk/事件位于 `StreamEvent.Raw`。
 
+### Responses 联网搜索
+
+OpenAI Responses API 可通过托管的 `web_search` 工具联网。`SendWebSearch` 会保留 `Parameters` 中已有的 Function Calling 工具，并追加联网工具：
+
+```go
+resp, err := c.SendWebSearch(
+	context.Background(),
+	"查询今天的重要 AI 新闻，并标注来源",
+	spec.WebSearchConfig{
+		SearchContextSize: spec.WebSearchContextSizeMedium,
+		ExternalWebAccess: spec.Bool(true),
+		Filters: &spec.WebSearchFilters{
+			AllowedDomains: []string{"openai.com", "reuters.com"},
+		},
+		IncludeSources: true,
+		ToolChoice:     "required", // auto 表示由模型决定是否搜索
+	},
+)
+if err != nil {
+	return err
+}
+
+fmt.Println(resp.Message.Content)
+for _, call := range resp.WebSearchCalls {
+	for _, source := range call.Action.Sources {
+		fmt.Println(source.Title, source.URL)
+	}
+}
+for _, citation := range resp.Citations {
+	fmt.Println(citation.Title, citation.URL)
+}
+```
+
+`WebSearchConfig` 还支持 `ReturnTokenBudget`、`UserLocation`、`SearchContentTypes`、`ImageSettings` 和 `IncludeResults`。搜索正文中的 `url_citation` 会解析到 `resp.Citations`；请求 `IncludeSources` 后，完整来源位于 `resp.WebSearchCalls[].Action.Sources`。向最终用户展示联网结果时，应让引用清晰可见并可点击。
+
+该封装只允许 `/responses` 端点使用 `WithWebSearch`。第三方兼容服务是否真正透传 OpenAI 托管工具仍取决于服务商；可以填写 `openai_llm_test.go` 的配置后运行 `go test -run TestOpenAIResponsesWebSearch -v` 实测。
+
 ### Responses 连续对话
 
 `SendResponse` 直接接受 Responses API 的 `input`。`ContinueResponse` 会发送 `previous_response_id`，不会重复发送本地聊天历史：

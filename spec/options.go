@@ -111,6 +111,7 @@ type RequestConfig struct {
 	ResponseInput      any
 	Instructions       any
 	PreviousResponseID string
+	WebSearch          *WebSearchConfig
 	EventCallback      EventCallback
 
 	text2Image bool
@@ -246,6 +247,15 @@ func WithInstructions(instructions any) Option {
 func WithPreviousResponseID(id string) Option {
 	return func(r *RequestConfig) {
 		r.PreviousResponseID = id
+	}
+}
+
+// WithWebSearch enables OpenAI's hosted web_search tool for a Responses API
+// request. It can coexist with function tools supplied through Parameters.
+func WithWebSearch(config WebSearchConfig) Option {
+	return func(r *RequestConfig) {
+		copy := config
+		r.WebSearch = &copy
 	}
 }
 

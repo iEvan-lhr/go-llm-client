@@ -32,6 +32,9 @@ func ChatMessages(ctx context.Context, messages []spec.Message, cfg Config) (*sp
 	if cfg.PreviousResponseID != "" {
 		opts = append(opts, spec.WithPreviousResponseID(cfg.PreviousResponseID))
 	}
+	if cfg.WebSearch != nil {
+		opts = append(opts, spec.WithWebSearch(*cfg.WebSearch))
+	}
 	if cfg.StreamCallback != nil {
 		opts = append(opts, spec.WithStreamCallback(cfg.StreamCallback))
 	}

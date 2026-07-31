@@ -30,6 +30,7 @@ type Config struct {
 	ResponseInput      any
 	Instructions       any
 	PreviousResponseID string
+	WebSearch          *spec.WebSearchConfig
 	//add
 	Translation *spec.TranslationOptions
 	// StreamCallback 用于接收流式数据的回调函数

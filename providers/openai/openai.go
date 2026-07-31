@@ -60,7 +60,11 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 		opt(config)
 	}
 
-	if isResponsesURL(m.client.config.APIURL) {
+	responsesEndpoint := isResponsesURL(m.client.config.APIURL)
+	if config.WebSearch != nil && !responsesEndpoint {
+		return nil, fmt.Errorf("openai provider: web_search requires a /responses endpoint")
+	}
+	if responsesEndpoint {
 		return m.responses(ctx, messages, config)
 	}
 	return m.chatCompletions(ctx, messages, config)
@@ -158,6 +162,11 @@ func (m *modelImpl) responses(ctx context.Context, messages []spec.Message, conf
 	}
 	if effort := effectiveReasoningEffort(config); effort != "" {
 		requestBody["reasoning"] = mergeReasoningConfig(requestBody["reasoning"], effort)
+	}
+	if config.WebSearch != nil {
+		if err := applyWebSearch(requestBody, *config.WebSearch); err != nil {
+			return nil, err
+		}
 	}
 
 	if config.Streaming {
@@ -419,6 +428,110 @@ func cloneParameters(parameters map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func applyWebSearch(requestBody map[string]any, config spec.WebSearchConfig) error {
+	tool := map[string]any{"type": "web_search"}
+	if config.SearchContextSize != "" {
+		tool["search_context_size"] = config.SearchContextSize
+	}
+	if config.ReturnTokenBudget != "" {
+		tool["return_token_budget"] = config.ReturnTokenBudget
+	}
+	if config.ExternalWebAccess != nil {
+		tool["external_web_access"] = *config.ExternalWebAccess
+	}
+	if config.Filters != nil {
+		tool["filters"] = config.Filters
+	}
+	if config.UserLocation != nil {
+		location := *config.UserLocation
+		if location.Type == "" {
+			location.Type = "approximate"
+		}
+		tool["user_location"] = location
+	}
+	if len(config.SearchContentTypes) > 0 {
+		tool["search_content_types"] = config.SearchContentTypes
+	}
+	if config.ImageSettings != nil {
+		tool["image_settings"] = config.ImageSettings
+	}
+
+	tools, err := normalizeJSONArray(requestBody["tools"], "tools")
+	if err != nil {
+		return err
+	}
+	replaced := false
+	for index, existing := range tools {
+		object, ok := existing.(map[string]any)
+		if ok && object["type"] == "web_search" {
+			tools[index] = tool
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		tools = append(tools, tool)
+	}
+	requestBody["tools"] = tools
+
+	if config.ToolChoice != nil {
+		requestBody["tool_choice"] = config.ToolChoice
+	}
+	if config.IncludeSources || config.IncludeResults {
+		include, err := normalizeStringArray(requestBody["include"], "include")
+		if err != nil {
+			return err
+		}
+		if config.IncludeSources {
+			include = appendUnique(include, "web_search_call.action.sources")
+		}
+		if config.IncludeResults {
+			include = appendUnique(include, "web_search_call.results")
+		}
+		requestBody["include"] = include
+	}
+	return nil
+}
+
+func normalizeJSONArray(value any, field string) ([]any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("openai provider: encode %s: %w", field, err)
+	}
+	var result []any
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return nil, fmt.Errorf("openai provider: %s must be an array: %w", field, err)
+	}
+	return result, nil
+}
+
+func normalizeStringArray(value any, field string) ([]string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("openai provider: encode %s: %w", field, err)
+	}
+	var result []string
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return nil, fmt.Errorf("openai provider: %s must be a string array: %w", field, err)
+	}
+	return result, nil
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func effectiveReasoningEffort(config *spec.RequestConfig) spec.ReasoningEffort {
@@ -694,19 +807,75 @@ func parseResponses(rawBody []byte) (*spec.ResponsesAPIResponse, spec.Message, e
 }
 
 func newResponsesResult(response *spec.ResponsesAPIResponse, message spec.Message, rawBody []byte) *spec.Response {
+	webSearchCalls, citations := responsesWebSearchMetadata(response)
 	return &spec.Response{
-		Protocol:  spec.ProtocolResponses,
-		ID:        response.ID,
-		Model:     response.Model,
-		Status:    response.Status,
-		Message:   message,
-		Usage:     response.Usage,
-		Responses: response,
+		Protocol:       spec.ProtocolResponses,
+		ID:             response.ID,
+		Model:          response.Model,
+		Status:         response.Status,
+		Message:        message,
+		Usage:          response.Usage,
+		Responses:      response,
+		WebSearchCalls: webSearchCalls,
+		Citations:      citations,
 		RawResponse: append(
 			[]byte(nil),
 			rawBody...,
 		),
 	}
+}
+
+func responsesWebSearchMetadata(response *spec.ResponsesAPIResponse) ([]spec.WebSearchCall, []spec.URLCitation) {
+	var calls []spec.WebSearchCall
+	var citations []spec.URLCitation
+	for _, output := range response.Output {
+		if output.Type == "web_search_call" {
+			call := spec.WebSearchCall{ID: output.ID, Status: output.Status}
+			if len(output.Action) > 0 {
+				_ = json.Unmarshal(output.Action, &call.Action)
+			}
+			if len(output.Results) > 0 {
+				_ = json.Unmarshal(output.Results, &call.Results)
+			}
+			calls = append(calls, call)
+		}
+		for _, part := range output.Content {
+			for _, raw := range part.Annotations {
+				if citation, ok := parseURLCitation(raw); ok {
+					citations = append(citations, citation)
+				}
+			}
+		}
+	}
+	return calls, citations
+}
+
+func parseURLCitation(raw json.RawMessage) (spec.URLCitation, bool) {
+	var annotation struct {
+		Type        string            `json:"type"`
+		StartIndex  int               `json:"start_index"`
+		EndIndex    int               `json:"end_index"`
+		URL         string            `json:"url"`
+		Title       string            `json:"title"`
+		URLCitation *spec.URLCitation `json:"url_citation"`
+	}
+	if err := json.Unmarshal(raw, &annotation); err != nil || annotation.Type != "url_citation" {
+		return spec.URLCitation{}, false
+	}
+	if annotation.URLCitation != nil {
+		citation := *annotation.URLCitation
+		if citation.Type == "" {
+			citation.Type = annotation.Type
+		}
+		return citation, true
+	}
+	return spec.URLCitation{
+		Type:       annotation.Type,
+		StartIndex: annotation.StartIndex,
+		EndIndex:   annotation.EndIndex,
+		URL:        annotation.URL,
+		Title:      annotation.Title,
+	}, true
 }
 
 func scanSSE(resp *http.Response, handleData func(string) error) error {
