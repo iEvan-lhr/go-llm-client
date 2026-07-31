@@ -2,10 +2,10 @@ package llm
 
 import (
 	"fmt"
-	"github.com/iEvan-lhr/go-llm-client/providers/deepseek"
 	"sync"
 
 	"github.com/iEvan-lhr/go-llm-client/providers/dashscope"
+	"github.com/iEvan-lhr/go-llm-client/providers/deepseek"
 	"github.com/iEvan-lhr/go-llm-client/providers/generic"
 	"github.com/iEvan-lhr/go-llm-client/providers/openai"
 	"github.com/iEvan-lhr/go-llm-client/providers/openrouter" // ✅ 新增包导入
@@ -21,7 +21,7 @@ var (
 // GetClient 负责创建和缓存客户端实例。
 // 它是导出的，因此 client 包可以使用它。
 func GetClient(cfg Config) (spec.Client, error) {
-	cacheKey := fmt.Sprintf("%s|%s|%s", cfg.Provider, cfg.APIURL, cfg.APIKey)
+	cacheKey := fmt.Sprintf("%s|%s|%s|%d", cfg.Provider, cfg.APIURL, cfg.APIKey, cfg.Timeout)
 
 	cacheMutex.RLock()
 	client, found := clientCache[cacheKey]
@@ -44,6 +44,9 @@ func GetClient(cfg Config) (spec.Client, error) {
 	}
 	if cfg.APIURL != "" {
 		clientOpts = append(clientOpts, spec.WithAPIURL(cfg.APIURL))
+	}
+	if cfg.Timeout != 0 {
+		clientOpts = append(clientOpts, spec.WithTimeout(cfg.Timeout))
 	}
 
 	var newClient spec.Client

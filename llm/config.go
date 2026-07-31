@@ -1,6 +1,10 @@
 package llm
 
-import "github.com/iEvan-lhr/go-llm-client/spec"
+import (
+	"time"
+
+	"github.com/iEvan-lhr/go-llm-client/spec"
+)
 
 // ReasoningEffort is the model reasoning level used by providers that support it.
 type ReasoningEffort = spec.ReasoningEffort
@@ -16,10 +20,13 @@ const (
 
 // Config 包含了执行一次Chat调用所需的所有配置。
 type Config struct {
-	Provider     string
-	Model        string
-	APIKey       string
-	APIURL       string
+	Provider string
+	Model    string
+	APIKey   string
+	APIURL   string
+	// Timeout controls the complete HTTP request duration. Zero uses the
+	// library default of 10 minutes.
+	Timeout      time.Duration
 	SystemPrompt string
 	Thinking     *bool
 	// ReasoningEffort controls the model's reasoning level, for example

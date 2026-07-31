@@ -142,6 +142,8 @@ c, err := client.New(llm.Config{
 	Model:    "gpt-5.6-sol",
 	APIKey:   os.Getenv("OPENAI_API_KEY"),
 	APIURL:   "https://www.poke2api.com/v1/responses",
+	// 默认 10 分钟；长时间联网或推理任务可以自定义。
+	Timeout: 15 * time.Minute,
 	// 可选：none、minimal、low、medium、high、xhigh；具体可用等级由模型决定。
 	ReasoningEffort: llm.ReasoningEffortHigh,
 })
@@ -379,6 +381,7 @@ func main() {
 | `Model` | 模型名称: `qwen-plus`, `gpt-4o`, `qwen-image-plus` 等 |
 | `APIKey` | API 密钥 |
 | `APIURL` | (可选) 自定义接口地址，用于代理或私有部署 |
+| `Timeout` | (可选) 完整 HTTP 请求超时，默认 10 分钟，例如 `15*time.Minute` |
 | `Thinking` | (可选) `llm.Thinking()` 开启思考模式适配 |
 | `ReasoningEffort` | (可选) 思考等级，如 `llm.ReasoningEffortLow`、`llm.ReasoningEffortMedium`、`llm.ReasoningEffortHigh` |
 | `SystemPrompt` | (可选) 系统预设人设 |

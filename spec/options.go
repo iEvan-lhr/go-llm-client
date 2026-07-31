@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// DefaultHTTPTimeout is the maximum duration of a complete HTTP request when
+// callers do not provide a custom timeout.
+const DefaultHTTPTimeout = 10 * time.Minute
+
 // --- 1. Client Options ---
 // 用于在创建顶级客户端（如Dashscope, OpenAI）时进行配置。
 
@@ -24,8 +28,7 @@ type ClientConfig struct {
 // NewClientConfig 创建一个带有默认值的客户端配置。
 func NewClientConfig() *ClientConfig {
 	return &ClientConfig{
-		// 设置一个合理的默认HTTP客户端
-		HTTPClient: &http.Client{Timeout: 240 * time.Second},
+		HTTPClient: &http.Client{Timeout: DefaultHTTPTimeout},
 	}
 }
 
@@ -50,6 +53,18 @@ func WithAPIURL(url string) ClientOption {
 func WithHTTPClient(client *http.Client) ClientOption {
 	return func(c *ClientConfig) {
 		c.HTTPClient = client
+	}
+}
+
+// WithTimeout sets the maximum duration of a complete HTTP request. It applies
+// to the currently configured HTTP client; a zero value disables the client
+// timeout, matching net/http.Client behavior.
+func WithTimeout(timeout time.Duration) ClientOption {
+	return func(c *ClientConfig) {
+		if c.HTTPClient == nil {
+			c.HTTPClient = &http.Client{}
+		}
+		c.HTTPClient.Timeout = timeout
 	}
 }
 
