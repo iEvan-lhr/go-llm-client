@@ -16,6 +16,7 @@ const (
 	ReasoningEffortMedium  = spec.ReasoningEffortMedium
 	ReasoningEffortHigh    = spec.ReasoningEffortHigh
 	ReasoningEffortXHigh   = spec.ReasoningEffortXHigh
+	ReasoningEffortMax     = spec.ReasoningEffortMax
 )
 
 // Config 包含了执行一次Chat调用所需的所有配置。

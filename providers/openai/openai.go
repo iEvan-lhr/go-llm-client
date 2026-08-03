@@ -135,7 +135,11 @@ func (m *modelImpl) responses(ctx context.Context, messages []spec.Message, conf
 	requestBody["model"] = m.name
 	switch {
 	case config.ResponseInput != nil:
-		requestBody["input"] = config.ResponseInput
+		input, err := normalizeResponseInput(config.ResponseInput)
+		if err != nil {
+			return nil, err
+		}
+		requestBody["input"] = input
 	case requestBody["input"] != nil:
 		// Keep a forward-compatible input supplied through Parameters.
 	default:
@@ -304,14 +308,19 @@ func (m *modelImpl) streamResponses(ctx context.Context, requestBody map[string]
 	if err != nil {
 		return nil, err
 	}
+	return m.consumeResponsesStream(ctx, resp, requestBody, config)
+}
+
+func (m *modelImpl) consumeResponsesStream(ctx context.Context, resp *http.Response, requestBody map[string]any, config *spec.RequestConfig) (*spec.Response, error) {
 	defer resp.Body.Close()
 
 	var fullContent strings.Builder
 	var refusal strings.Builder
 	var reasoning strings.Builder
 	var terminalResponse json.RawMessage
+	var outputItems []spec.ResponseOutputItem
 
-	err = scanSSE(resp, func(data string) error {
+	err := scanSSE(resp, func(data string) error {
 		if data == "[DONE]" {
 			return nil
 		}
@@ -319,9 +328,7 @@ func (m *modelImpl) streamResponses(ctx context.Context, requestBody map[string]
 		raw := json.RawMessage(append([]byte(nil), data...))
 		var event struct {
 			spec.StreamEvent
-			Code    string         `json:"code"`
-			Message string         `json:"message"`
-			Error   *spec.APIError `json:"error"`
+			Error *spec.APIError `json:"error"`
 		}
 		if err := json.Unmarshal(raw, &event); err != nil {
 			return fmt.Errorf("openai responses: failed to decode stream event: %w", err)
@@ -352,6 +359,19 @@ func (m *modelImpl) streamResponses(ctx context.Context, requestBody map[string]
 			reasoning.WriteString(event.Delta)
 			if config.ReasoningCallback != nil {
 				return config.ReasoningCallback(ctx, event.Delta)
+			}
+		case "response.output_audio_transcript.delta":
+			fullContent.WriteString(event.Delta)
+			if config.StreamCallback != nil {
+				return config.StreamCallback(ctx, event.Delta)
+			}
+		case "response.output_item.done":
+			if len(event.Item) > 0 {
+				var item spec.ResponseOutputItem
+				if err := json.Unmarshal(event.Item, &item); err != nil {
+					return fmt.Errorf("openai responses: decode output item: %w", err)
+				}
+				outputItems = append(outputItems, item)
 			}
 		case "response.completed", "response.incomplete":
 			terminalResponse = append(terminalResponse[:0], event.Response...)
@@ -400,6 +420,7 @@ func (m *modelImpl) streamResponses(ctx context.Context, requestBody map[string]
 	parsed := &spec.ResponsesAPIResponse{
 		Model:      fmt.Sprint(requestBody["model"]),
 		Status:     "completed",
+		Output:     outputItems,
 		OutputText: fullContent.String(),
 	}
 	message := spec.Message{
@@ -668,6 +689,12 @@ func chatMessages(messages []spec.Message) []any {
 					file["filename"] = part.Filename
 				}
 				parts = append(parts, map[string]any{"type": "file", "file": file})
+			case "input_audio":
+				if part.InputAudio == nil {
+					parts = append(parts, part)
+					continue
+				}
+				parts = append(parts, map[string]any{"type": "input_audio", "input_audio": part.InputAudio})
 			default:
 				parts = append(parts, part)
 			}
@@ -696,14 +723,35 @@ type responsesInputMessage struct {
 }
 
 type responsesInputPart struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	ImageURL string `json:"image_url,omitempty"`
-	Detail   string `json:"detail,omitempty"`
-	FileURL  string `json:"file_url,omitempty"`
-	FileID   string `json:"file_id,omitempty"`
-	FileData string `json:"file_data,omitempty"`
-	Filename string `json:"filename,omitempty"`
+	Type       string                   `json:"type"`
+	Text       string                   `json:"text,omitempty"`
+	ImageURL   string                   `json:"image_url,omitempty"`
+	Detail     string                   `json:"detail,omitempty"`
+	FileURL    string                   `json:"file_url,omitempty"`
+	FileID     string                   `json:"file_id,omitempty"`
+	FileData   string                   `json:"file_data,omitempty"`
+	Filename   string                   `json:"filename,omitempty"`
+	InputAudio *spec.ResponseInputAudio `json:"input_audio,omitempty"`
+}
+
+func normalizeResponseInput(input any) (any, error) {
+	switch value := input.(type) {
+	case spec.Message:
+		return responsesInput([]spec.Message{value})
+	case *spec.Message:
+		if value == nil {
+			return nil, nil
+		}
+		return responsesInput([]spec.Message{*value})
+	case []spec.Message:
+		return responsesInput(value)
+	case []spec.ContentPart:
+		return responsesInput([]spec.Message{spec.NewUserPartsMessage(value...)})
+	case spec.ContentPart:
+		return responsesInput([]spec.Message{spec.NewUserPartsMessage(value)})
+	default:
+		return input, nil
+	}
 }
 
 func responsesInput(messages []spec.Message) ([]responsesInputMessage, error) {
@@ -720,13 +768,19 @@ func responsesInput(messages []spec.Message) ([]responsesInputMessage, error) {
 			case "text", "input_text":
 				parts = append(parts, responsesInputPart{Type: "input_text", Text: part.Text})
 			case "image_url", "input_image":
-				if part.ImageURL == nil || part.ImageURL.URL == "" {
-					return nil, fmt.Errorf("openai responses: image content part requires a URL")
+				if (part.ImageURL == nil || part.ImageURL.URL == "") && part.FileID == "" {
+					return nil, fmt.Errorf("openai responses: image content part requires image_url or file_id")
+				}
+				var imageURL, detail string
+				if part.ImageURL != nil {
+					imageURL = part.ImageURL.URL
+					detail = part.ImageURL.Detail
 				}
 				parts = append(parts, responsesInputPart{
 					Type:     "input_image",
-					ImageURL: part.ImageURL.URL,
-					Detail:   part.ImageURL.Detail,
+					ImageURL: imageURL,
+					FileID:   part.FileID,
+					Detail:   detail,
 				})
 			case "file", "input_file":
 				if part.FileURL == "" && part.FileID == "" && part.FileData == "" {
@@ -738,6 +792,14 @@ func responsesInput(messages []spec.Message) ([]responsesInputMessage, error) {
 					FileID:   part.FileID,
 					FileData: part.FileData,
 					Filename: part.Filename,
+				})
+			case "input_audio", "audio":
+				if part.InputAudio == nil || part.InputAudio.Data == "" || part.InputAudio.Format == "" {
+					return nil, fmt.Errorf("openai responses: audio content part requires base64 data and format")
+				}
+				parts = append(parts, responsesInputPart{
+					Type:       "input_audio",
+					InputAudio: part.InputAudio,
 				})
 			default:
 				return nil, fmt.Errorf("openai responses: unsupported content part type %q", part.Type)
@@ -880,7 +942,9 @@ func parseURLCitation(raw json.RawMessage) (spec.URLCitation, bool) {
 
 func scanSSE(resp *http.Response, handleData func(string) error) error {
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 10*1024*1024)
+	// Image/audio/tool events can contain large base64 payloads. Keep the
+	// initial allocation small while allowing a complete multimodal event.
+	scanner.Buffer(make([]byte, 64*1024), 64*1024*1024)
 
 	var dataLines []string
 	dispatch := func() error {

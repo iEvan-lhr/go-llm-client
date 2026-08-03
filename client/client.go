@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/iEvan-lhr/go-llm-client/llm"
 	"github.com/iEvan-lhr/go-llm-client/spec"
@@ -116,20 +117,23 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	return model.Chat(ctx, messages, opts...)
 }
 
-// SendResponse sends a direct Responses API input without modifying chat
-// history. The configured endpoint must end in /responses.
+// SendResponse sends a direct OpenAI Responses API input without modifying
+// chat history. APIURL may be an API root, /chat/completions, or /responses.
 func (c *Client) SendResponse(ctx context.Context, input any, opts ...spec.Option) (*spec.Response, error) {
-	extraOpts := make([]spec.Option, 0, len(opts)+2)
-	extraOpts = append(extraOpts, spec.WithResponseInput(input))
-	if c.config.Instructions == nil && c.config.SystemPrompt != "" {
-		extraOpts = append(extraOpts, spec.WithInstructions(c.config.SystemPrompt))
+	request := spec.ResponseCreateRequest{
+		Model:              c.config.Model,
+		Input:              input,
+		Instructions:       c.config.Instructions,
+		PreviousResponseID: c.config.PreviousResponseID,
 	}
-	extraOpts = append(extraOpts, opts...)
-	return c.invoke(ctx, nil, nil, extraOpts...)
+	if request.Instructions == nil && c.config.SystemPrompt != "" {
+		request.Instructions = c.config.SystemPrompt
+	}
+	return c.CreateResponse(ctx, request, opts...)
 }
 
 // SendWebSearch sends a Responses API request with OpenAI's hosted web_search
-// tool enabled. The configured endpoint must end in /responses.
+// tool enabled.
 func (c *Client) SendWebSearch(ctx context.Context, input any, config spec.WebSearchConfig, opts ...spec.Option) (*spec.Response, error) {
 	extraOpts := make([]spec.Option, 0, len(opts)+1)
 	extraOpts = append(extraOpts, spec.WithWebSearch(config))
@@ -204,6 +208,24 @@ func (c *Client) SendText2Image(ctx context.Context, userPrompt string, opts ...
 
 	// 应用文生图配置选项
 	tiConfig := applyText2ImageOptions(opts...)
+
+	// OpenAI image generation is a Responses hosted tool, not a collection of
+	// top-level Chat Completions parameters.
+	if _, ok := c.client.(spec.ResponsesClient); ok {
+		tool := spec.NewImageGenerationTool()
+		tool.Size = strings.ReplaceAll(tiConfig.Size, "*", "x")
+		prompt := userPrompt
+		if tiConfig.NegativePrompt != "" {
+			prompt += "\nAvoid: " + tiConfig.NegativePrompt
+		}
+		resp, err := c.GenerateImage(ctx, prompt, tool)
+		if err != nil {
+			c.history = c.history[:len(c.history)-1]
+			return nil, err
+		}
+		c.history = append(c.history, resp.Message)
+		return resp, nil
+	}
 
 	// 将文生图配置转换为 Parameters map
 	parameters := map[string]any{

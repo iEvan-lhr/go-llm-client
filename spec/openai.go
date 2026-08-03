@@ -31,6 +31,7 @@ type ToolCall struct {
 // TokenDetails contains optional token categories returned by OpenAI APIs.
 type TokenDetails struct {
 	CachedTokens             int `json:"cached_tokens,omitempty"`
+	CacheWriteTokens         int `json:"cache_write_tokens,omitempty"`
 	AudioTokens              int `json:"audio_tokens,omitempty"`
 	ReasoningTokens          int `json:"reasoning_tokens,omitempty"`
 	AcceptedPredictionTokens int `json:"accepted_prediction_tokens,omitempty"`
@@ -85,26 +86,42 @@ type ResponseOutputContent struct {
 	Type        string            `json:"type"`
 	Text        string            `json:"text,omitempty"`
 	Refusal     string            `json:"refusal,omitempty"`
+	Data        string            `json:"data,omitempty"`
+	Transcript  string            `json:"transcript,omitempty"`
 	Annotations []json.RawMessage `json:"annotations,omitempty"`
 	Logprobs    []json.RawMessage `json:"logprobs,omitempty"`
+	Raw         json.RawMessage   `json:"-"`
 }
 
 // ResponseOutputItem represents the common fields across Responses output item
 // variants, including messages, function calls, and hosted tool calls.
 type ResponseOutputItem struct {
-	ID        string                  `json:"id,omitempty"`
-	Type      string                  `json:"type"`
-	Role      Role                    `json:"role,omitempty"`
-	Status    string                  `json:"status,omitempty"`
-	Content   []ResponseOutputContent `json:"content,omitempty"`
-	Summary   []ResponseOutputContent `json:"summary,omitempty"`
-	Name      string                  `json:"name,omitempty"`
-	CallID    string                  `json:"call_id,omitempty"`
-	Arguments string                  `json:"arguments,omitempty"`
-	Output    json.RawMessage         `json:"output,omitempty"`
-	Action    json.RawMessage         `json:"action,omitempty"`
-	Result    json.RawMessage         `json:"result,omitempty"`
-	Results   json.RawMessage         `json:"results,omitempty"`
+	ID                       string                  `json:"id,omitempty"`
+	Type                     string                  `json:"type"`
+	Role                     Role                    `json:"role,omitempty"`
+	Status                   string                  `json:"status,omitempty"`
+	Content                  []ResponseOutputContent `json:"content,omitempty"`
+	Summary                  []ResponseOutputContent `json:"summary,omitempty"`
+	Name                     string                  `json:"name,omitempty"`
+	CallID                   string                  `json:"call_id,omitempty"`
+	Arguments                string                  `json:"arguments,omitempty"`
+	Input                    string                  `json:"input,omitempty"`
+	Output                   json.RawMessage         `json:"output,omitempty"`
+	Action                   json.RawMessage         `json:"action,omitempty"`
+	Result                   json.RawMessage         `json:"result,omitempty"`
+	Results                  json.RawMessage         `json:"results,omitempty"`
+	Code                     string                  `json:"code,omitempty"`
+	ContainerID              string                  `json:"container_id,omitempty"`
+	Queries                  []string                `json:"queries,omitempty"`
+	ServerLabel              string                  `json:"server_label,omitempty"`
+	ApprovalRequestID        string                  `json:"approval_request_id,omitempty"`
+	EncryptedContent         string                  `json:"encrypted_content,omitempty"`
+	Operation                json.RawMessage         `json:"operation,omitempty"`
+	PendingSafetyChecks      []json.RawMessage       `json:"pending_safety_checks,omitempty"`
+	AcknowledgedSafetyChecks []json.RawMessage       `json:"acknowledged_safety_checks,omitempty"`
+	Error                    *APIError               `json:"error,omitempty"`
+	Phase                    string                  `json:"phase,omitempty"`
+	Raw                      json.RawMessage         `json:"-"`
 }
 
 const (
@@ -243,20 +260,36 @@ type ResponsesAPIResponse struct {
 	MaxToolCalls         int                  `json:"max_tool_calls,omitempty"`
 	SafetyIdentifier     string               `json:"safety_identifier,omitempty"`
 	PromptCacheKey       string               `json:"prompt_cache_key,omitempty"`
+	PromptCacheOptions   json.RawMessage      `json:"prompt_cache_options,omitempty"`
 	PromptCacheRetention string               `json:"prompt_cache_retention,omitempty"`
+	Conversation         json.RawMessage      `json:"conversation,omitempty"`
+	ContextManagement    []json.RawMessage    `json:"context_management,omitempty"`
+	Moderation           json.RawMessage      `json:"moderation,omitempty"`
+	TopLogprobs          int                  `json:"top_logprobs,omitempty"`
+	User                 string               `json:"user,omitempty"`
 }
 
 // ResponseInputItem is a flexible Responses input item. It supports message
 // items and function_call_output without preventing newer item types.
 type ResponseInputItem struct {
-	Type      string `json:"type,omitempty"`
-	Role      Role   `json:"role,omitempty"`
-	Content   any    `json:"content,omitempty"`
-	ID        string `json:"id,omitempty"`
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-	Output    any    `json:"output,omitempty"`
+	Type                     string            `json:"type,omitempty"`
+	Role                     Role              `json:"role,omitempty"`
+	Status                   string            `json:"status,omitempty"`
+	Content                  any               `json:"content,omitempty"`
+	ID                       string            `json:"id,omitempty"`
+	CallID                   string            `json:"call_id,omitempty"`
+	Name                     string            `json:"name,omitempty"`
+	Arguments                string            `json:"arguments,omitempty"`
+	Input                    string            `json:"input,omitempty"`
+	Output                   any               `json:"output,omitempty"`
+	ApprovalRequestID        string            `json:"approval_request_id,omitempty"`
+	Approve                  *bool             `json:"approve,omitempty"`
+	Reason                   string            `json:"reason,omitempty"`
+	EncryptedContent         string            `json:"encrypted_content,omitempty"`
+	Operation                any               `json:"operation,omitempty"`
+	AcknowledgedSafetyChecks []json.RawMessage `json:"acknowledged_safety_checks,omitempty"`
+	Raw                      json.RawMessage   `json:"-"`
+	ExtraFields              map[string]any    `json:"-"`
 }
 
 // NewFunctionCallOutput creates the input item used to return tool output to a
@@ -269,21 +302,74 @@ func NewFunctionCallOutput(callID string, output any) ResponseInputItem {
 	}
 }
 
+// NewToolCallOutput creates an output item for a tool call type such as
+// computer_call_output, custom_tool_call_output, local_shell_call_output,
+// shell_call_output, or apply_patch_call_output.
+func NewToolCallOutput(itemType, callID string, output any) ResponseInputItem {
+	return ResponseInputItem{Type: itemType, CallID: callID, Output: output}
+}
+
+func NewComputerCallOutput(callID string, output any, acknowledgedSafetyChecks ...json.RawMessage) ResponseInputItem {
+	return ResponseInputItem{
+		Type:                     "computer_call_output",
+		CallID:                   callID,
+		Output:                   output,
+		AcknowledgedSafetyChecks: acknowledgedSafetyChecks,
+	}
+}
+
+func NewCustomToolCallOutput(callID string, output any) ResponseInputItem {
+	return NewToolCallOutput("custom_tool_call_output", callID, output)
+}
+
+func NewShellCallOutput(callID string, output any) ResponseInputItem {
+	return NewToolCallOutput("shell_call_output", callID, output)
+}
+
+func NewLocalShellCallOutput(callID string, output any) ResponseInputItem {
+	return NewToolCallOutput("local_shell_call_output", callID, output)
+}
+
+func NewApplyPatchCallOutput(callID string, output any) ResponseInputItem {
+	return NewToolCallOutput("apply_patch_call_output", callID, output)
+}
+
+func NewMCPApprovalResponse(approvalRequestID string, approve bool, reason string) ResponseInputItem {
+	return ResponseInputItem{
+		Type:              "mcp_approval_response",
+		ApprovalRequestID: approvalRequestID,
+		Approve:           Bool(approve),
+		Reason:            reason,
+	}
+}
+
+func NewItemReference(itemID string) ResponseInputItem {
+	return ResponseInputItem{Type: "item_reference", ID: itemID}
+}
+
 // StreamEvent exposes every SSE payload while retaining common typed fields.
 // Raw always contains the complete event JSON.
 type StreamEvent struct {
-	Protocol       Protocol        `json:"-"`
-	Type           string          `json:"type,omitempty"`
-	SequenceNumber int             `json:"sequence_number,omitempty"`
-	Delta          string          `json:"delta,omitempty"`
-	ItemID         string          `json:"item_id,omitempty"`
-	OutputIndex    int             `json:"output_index,omitempty"`
-	ContentIndex   int             `json:"content_index,omitempty"`
-	SummaryIndex   int             `json:"summary_index,omitempty"`
-	Response       json.RawMessage `json:"response,omitempty"`
-	Item           json.RawMessage `json:"item,omitempty"`
-	Part           json.RawMessage `json:"part,omitempty"`
-	Raw            json.RawMessage `json:"-"`
+	Protocol          Protocol        `json:"-"`
+	Type              string          `json:"type,omitempty"`
+	SequenceNumber    int             `json:"sequence_number,omitempty"`
+	Delta             string          `json:"delta,omitempty"`
+	ResponseID        string          `json:"response_id,omitempty"`
+	ItemID            string          `json:"item_id,omitempty"`
+	OutputIndex       int             `json:"output_index,omitempty"`
+	ContentIndex      int             `json:"content_index,omitempty"`
+	SummaryIndex      int             `json:"summary_index,omitempty"`
+	AnnotationIndex   int             `json:"annotation_index,omitempty"`
+	PartialImageIndex int             `json:"partial_image_index,omitempty"`
+	Code              string          `json:"code,omitempty"`
+	Message           string          `json:"message,omitempty"`
+	Obfuscation       string          `json:"obfuscation,omitempty"`
+	Agent             json.RawMessage `json:"agent,omitempty"`
+	Response          json.RawMessage `json:"response,omitempty"`
+	Item              json.RawMessage `json:"item,omitempty"`
+	Part              json.RawMessage `json:"part,omitempty"`
+	Annotation        json.RawMessage `json:"annotation,omitempty"`
+	Raw               json.RawMessage `json:"-"`
 }
 
 // EventCallback receives each protocol event or Chat Completions chunk.

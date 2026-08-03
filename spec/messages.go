@@ -60,13 +60,14 @@ type ImageURL struct {
 }
 
 type ContentPart struct {
-	Type     string    `json:"type"`
-	Text     string    `json:"text,omitempty"`
-	ImageURL *ImageURL `json:"image_url,omitempty"`
-	FileURL  string    `json:"file_url,omitempty"`
-	FileID   string    `json:"file_id,omitempty"`
-	FileData string    `json:"file_data,omitempty"`
-	Filename string    `json:"filename,omitempty"`
+	Type       string              `json:"type"`
+	Text       string              `json:"text,omitempty"`
+	ImageURL   *ImageURL           `json:"image_url,omitempty"`
+	FileURL    string              `json:"file_url,omitempty"`
+	FileID     string              `json:"file_id,omitempty"`
+	FileData   string              `json:"file_data,omitempty"`
+	Filename   string              `json:"filename,omitempty"`
+	InputAudio *ResponseInputAudio `json:"input_audio,omitempty"`
 }
 
 func (m *Message) MarshalJSON() ([]byte, error) {
@@ -162,6 +163,28 @@ func NewImageURLPart(url string) ContentPart {
 			URL: url,
 		},
 	}
+}
+
+// NewInputImageFileIDPart references an image previously uploaded to OpenAI.
+// It is supported by the Responses API.
+func NewInputImageFileIDPart(fileID string) ContentPart {
+	return ContentPart{Type: "input_image", FileID: fileID}
+}
+
+// NewInputAudioPart creates inline Responses audio input. Data must be base64
+// without a data URL prefix; format is normally "mp3" or "wav".
+func NewInputAudioPart(format, base64Data string) ContentPart {
+	return ContentPart{
+		Type: "input_audio",
+		InputAudio: &ResponseInputAudio{
+			Data:   base64Data,
+			Format: format,
+		},
+	}
+}
+
+func NewInputAudioBytesPart(format string, data []byte) ContentPart {
+	return NewInputAudioPart(format, base64.StdEncoding.EncodeToString(data))
 }
 
 func NewInputFilePart(url string) ContentPart {

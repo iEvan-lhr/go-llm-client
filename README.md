@@ -6,10 +6,11 @@
 
 * **统一接口**：一套代码适配 Dashscope (阿里云百炼)、OpenAI 及各类私有化部署模型（Generic）。
 * **客户端模式 (Client)**：内置上下文记忆管理，像聊天一样简单地调用。
-* **多模态与文生图 (New 🚀)**：原生支持文生图 (Text-to-Image) 异步任务模型（如 DashScope 的 `qwen-image-plus`），轻松集成 AI 绘画能力。
+* **多模态输入与图像生成 (New 🚀)**：支持图片 URL/Base64/本地文件、音频、文档和文件 ID 输入，并支持 DashScope 异步文生图与 OpenAI Responses `image_generation`。
 * **流式响应 (Streaming)**：支持打字机效果，提供便捷的回调函数 (`StreamCallback`)。
 * **灵活的对话控制**：支持带历史对话、不带历史对话 (`SendNoHistory`) 以及流式不记录 (`SendStreamNoHistory`) 等多种模式。
 * **思考模式支持**：针对 DeepSeek R1 / Qwen 等推理模型，自动处理 `<think>` 标签或特定参数。
+* **完整 OpenAI Responses 支持**：覆盖 SSE、WebSocket、Function Calling、Hosted Tools、结构化输出、后台任务、续流、Compaction、Conversations、输入 token 计数和原始字段保留。
 
 ## 📦 安装
 
@@ -35,8 +36,8 @@ import (
     "os"
 
     // 引入两个核心包
-    "github.com/ievan-lhr/go-llm-client/client" // 核心客户端，管理会话
-    "github.com/ievan-lhr/go-llm-client/llm"    // 包含配置定义和通用类型
+    "github.com/iEvan-lhr/go-llm-client/client" // 核心客户端，管理会话
+    "github.com/iEvan-lhr/go-llm-client/llm"    // 包含配置定义和通用类型
 )
 
 func main() {
@@ -134,17 +135,17 @@ func main() {
 
 ## OpenAI Chat Completions 与 Responses API
 
-`openai` provider 会根据接口路径自动选择协议：`/chat/completions` 继续使用原有 Chat Completions 格式，`/responses` 使用 OpenAI Responses 格式。下面的配置会向 `POST https://www.poke2api.com/v1/responses` 发送请求：
+普通 `Send`/`SendParts` 会继续按配置路径选择 Chat Completions 或 Responses。`SendResponse`、`CreateResponse` 以及 Responses 生命周期方法会显式调用 Responses API，因此 `APIURL` 可以填写 API 根路径、`/chat/completions` 或 `/responses`，客户端会安全派生出正确端点。下面使用 OpenAI 官方端点；兼容服务只需替换 `APIURL`：
 
 ```go
 c, err := client.New(llm.Config{
 	Provider: "openai",
 	Model:    "gpt-5.6-sol",
 	APIKey:   os.Getenv("OPENAI_API_KEY"),
-	APIURL:   "https://www.poke2api.com/v1/responses",
+	APIURL:   "https://api.openai.com/v1/responses",
 	// 默认 10 分钟；长时间联网或推理任务可以自定义。
 	Timeout: 15 * time.Minute,
-	// 可选：none、minimal、low、medium、high、xhigh；具体可用等级由模型决定。
+	// 可选：none、minimal、low、medium、high、xhigh、max；具体可用等级由模型决定。
 	ReasoningEffort: llm.ReasoningEffortHigh,
 })
 if err != nil {
@@ -163,6 +164,18 @@ resp, err = c.SendPartsNoHistory(
 	spec.NewTextPart("描述这张图片"),
 )
 
+// 本地图片：读取文件并转换为 data:image/...;base64 URL。
+// 不要把 "img.png" 直接传给 NewImageURLPartWithDetail；服务端无法访问本地路径。
+localImage, err := spec.NewImageFilePart("img.png", "image/png")
+if err != nil {
+	return err
+}
+resp, err = c.SendPartsNoHistory(
+	context.Background(),
+	localImage,
+	spec.NewTextPart("描述这张本地图片"),
+)
+
 // 流式文本输出
 resp, err = c.SendStreamNoHistory(context.Background(), "写一首短诗", func(_ context.Context, chunk string) error {
 	fmt.Print(chunk)
@@ -171,6 +184,23 @@ resp, err = c.SendStreamNoHistory(context.Background(), "写一首短诗", func(
 ```
 
 图片流式理解可使用 `SendStreamParts`；最终完整文本仍会写入 `resp.Message.Content`。协议级完整结果分别位于 `resp.ChatCompletion` 和 `resp.Responses`。非流式原始 JSON 位于 `resp.RawResponse`；流式原始 chunk/事件位于 `StreamEvent.Raw`。
+
+### 多模态输入构造器
+
+`ContentPart` 会按目标协议自动转换为 Chat Completions content part 或 Responses input content。URL 构造器只接受服务端能够访问的完整 URL 或 data URL；本地路径请使用带 `File`/`Local` 的构造器。
+
+| 输入 | 构造器 | 说明 |
+| --- | --- | --- |
+| 文本 | `NewTextPart` | 普通文本输入 |
+| 图片 URL | `NewImageURLPart`、`NewImageURLPartWithDetail` | 公网 URL 或 `data:image/...;base64,...`；支持设置 detail |
+| 图片 Base64/内存 | `NewImageBase64Part`、`NewImageBytesPart` | 自动生成图片 data URL |
+| 本地图片 | `NewImageFilePart` | 读取本地文件并生成图片 data URL |
+| 已上传图片 | `NewInputImageFileIDPart` | Responses `input_image.file_id` |
+| 音频 | `NewInputAudioPart`、`NewInputAudioBytesPart` | Responses 内联 Base64 音频 |
+| 文档 URL | `NewInputFilePart` | Responses `input_file.file_url` |
+| 文档 Base64/内存 | `NewInputFileBase64Part`、`NewInputFileBytesPart` | 生成文档 data URL |
+| 本地文档 | `NewInputFileLocalPart` | 读取本地文件并生成文档 data URL |
+| 已上传文档 | `NewInputFileIDPart` | Responses `input_file.file_id` |
 
 ### Responses 联网搜索
 
@@ -190,6 +220,14 @@ resp, err := c.SendWebSearch(
 		ToolChoice:     "required", // auto 表示由模型决定是否搜索
 	},
 )
+
+// 显式 Responses 多模态输入；即使 APIURL 配成 /chat/completions 也会调用 /responses。
+resp, err = c.SendResponse(context.Background(), []spec.ContentPart{
+	spec.NewTextPart("总结图片、音频和文档"),
+	spec.NewInputImageFileIDPart("file_image"),
+	spec.NewInputAudioBytesPart("wav", audioBytes),
+	spec.NewInputFileIDPart("file_document"),
+})
 if err != nil {
 	return err
 }
@@ -207,7 +245,7 @@ for _, citation := range resp.Citations {
 
 `WebSearchConfig` 还支持 `ReturnTokenBudget`、`UserLocation`、`SearchContentTypes`、`ImageSettings` 和 `IncludeResults`。搜索正文中的 `url_citation` 会解析到 `resp.Citations`；请求 `IncludeSources` 后，完整来源位于 `resp.WebSearchCalls[].Action.Sources`。向最终用户展示联网结果时，应让引用清晰可见并可点击。
 
-该封装只允许 `/responses` 端点使用 `WithWebSearch`。第三方兼容服务是否真正透传 OpenAI 托管工具仍取决于服务商；可以填写 `openai_llm_test.go` 的配置后运行 `go test -run TestOpenAIResponsesWebSearch -v` 实测。
+该封装只允许 `/responses` 端点使用 `WithWebSearch`。第三方兼容服务是否真正透传 OpenAI 托管工具仍取决于服务商；通过 `OPENAI_TEST_API_KEY`、`OPENAI_TEST_BASE_URL` 和 `OPENAI_TEST_MODEL` 环境变量配置后，可运行 `go test -run TestOpenAIResponsesWebSearch -v` 实测。不要把真实 API Key 写入测试文件或提交到仓库。
 
 ### Responses 连续对话
 
@@ -221,6 +259,148 @@ if err != nil {
 
 next, err := c.ContinueResponse(ctx, first.ID, "我叫什么？")
 ```
+
+完整请求可以直接使用 `spec.ResponseCreateRequest`。稳定字段提供强类型，`ExtraFields` 可立即使用 OpenAI 新增但库尚未命名的字段：
+
+```go
+resp, err := c.CreateResponse(ctx, spec.ResponseCreateRequest{
+	Model: "gpt-5.6-sol",
+	Input: "提取订单号和金额，并在需要时调用查询函数",
+	Tools: []any{
+		spec.NewFunctionTool("lookup_order", "查询订单", orderSchema, true),
+		spec.NewWebSearchTool(),
+	},
+	Text: &spec.ResponseTextConfig{
+		Format: spec.NewResponseJSONSchemaFormat("order", outputSchema),
+	},
+	Reasoning: &spec.ResponseReasoningConfig{
+		Effort:  spec.ReasoningEffortHigh,
+		Summary: "auto",
+	},
+	Background: spec.Bool(true),
+	Store:      spec.Bool(true),
+})
+```
+
+`ResponseCreateRequest` 已提供下列稳定字段；OpenAI 后续新增字段可先放入 `ExtraFields`：
+
+| 分类 | 字段 |
+| --- | --- |
+| 模型与输入 | `Model`、`Input`、`Instructions` |
+| 状态与会话 | `PreviousResponseID`、`Conversation`、`Store`、`Metadata` |
+| 返回内容 | `Include`、`Text`、`Reasoning`、`MaxOutputTokens` |
+| 工具 | `Tools`、`ToolChoice`、`ParallelToolCalls`、`MaxToolCalls` |
+| 采样 | `Temperature`、`TopP`、`TopLogprobs` |
+| 流式与后台 | `Stream`、`StreamOptions`、`Background` |
+| 服务与缓存 | `ServiceTier`、`PromptCacheKey`、`PromptCacheOptions`、`PromptCacheRetention` |
+| Prompt 模板 | `Prompt` |
+| 上下文与截断 | `ContextManagement`、`Truncation` |
+| 安全与审核 | `SafetyIdentifier`、`Moderation`、`User` |
+| 前向兼容 | `ExtraFields` |
+
+### Responses 工具与工具结果
+
+库为当前已接入的 Responses 工具提供了构造器。工具是否可用仍取决于具体模型、账号和兼容服务：
+
+| 工具 | 构造器 |
+| --- | --- |
+| Function Calling | `NewFunctionTool` |
+| Web Search | `NewWebSearchTool` |
+| File Search | `NewFileSearchTool` |
+| Image Generation | `NewImageGenerationTool` |
+| Code Interpreter | `NewCodeInterpreterTool` |
+| Remote MCP | `NewMCPTool` |
+| Computer Use | `NewComputerTool` |
+| Custom Tool | `NewCustomTool` |
+| Local Shell / Hosted Shell | `NewLocalShellTool`、`NewShellTool` |
+| Apply Patch | `NewApplyPatchTool` |
+| Tool Search | `NewToolSearchTool` |
+| Programmatic Tool Calling | `NewProgrammaticToolCallingTool` |
+| Namespace | `NewNamespaceTool` |
+
+工具选择可以使用 `RequiredToolChoice`、`AutoToolChoice`、`NoneToolChoice`、`ToolChoice` 和 `NamedFunctionToolChoice`。不在强类型构造器中的新工具仍可通过 `spec.ResponseTool.ExtraFields` 或 `map[string]any` 立即使用。
+
+工具执行结果和控制项可以通过以下 input item 回传：
+
+| 类型 | 构造器 |
+| --- | --- |
+| Function 结果 | `NewFunctionCallOutput` |
+| 任意 call output | `NewToolCallOutput` |
+| Computer 结果 | `NewComputerCallOutput` |
+| Custom Tool 结果 | `NewCustomToolCallOutput` |
+| Shell 结果 | `NewShellCallOutput`、`NewLocalShellCallOutput` |
+| Apply Patch 结果 | `NewApplyPatchCallOutput` |
+| MCP 审批 | `NewMCPApprovalResponse` |
+| 引用既有 item | `NewItemReference` |
+
+### 图像生成
+
+```go
+tool := spec.NewImageGenerationTool()
+tool.Size = "1536x1024"
+tool.Quality = "high"
+
+resp, err := c.GenerateImage(ctx, "雨夜中的未来上海", tool)
+images := resp.Responses.ImageGenerationResults() // base64 图片列表
+```
+
+`SendText2Image` 在 OpenAI provider 下也会自动改用 Responses `image_generation` 工具，其他 provider 保持原行为。
+
+### 后台任务、续流与生命周期
+
+```go
+// 查询后台响应。
+resp, err := c.RetrieveResponse(ctx, "resp_xxx", spec.ResponseRetrieveOptions{})
+
+// 从最后收到的 sequence_number 继续 SSE。
+resp, err = c.RetrieveResponse(ctx, "resp_xxx", spec.ResponseRetrieveOptions{
+	Stream:        true,
+	StartingAfter: 128,
+}, spec.WithEventCallback(handleEvent))
+
+// 取消、删除、查看原始输入、预估 token、压缩长上下文。
+_, _ = c.CancelResponse(ctx, "resp_xxx")
+_, _ = c.DeleteResponse(ctx, "resp_xxx")
+items, _ := c.ListResponseInputItems(ctx, "resp_xxx", spec.ResponseInputItemsOptions{})
+tokens, _ := c.CountResponseInputTokens(ctx, spec.ResponseInputTokenCountRequest{Input: "hello"})
+compact, _ := c.CompactResponse(ctx, spec.ResponseCompactRequest{Input: priorItems})
+```
+
+同时支持 conversations 的创建、查询、更新、删除，以及 conversation items 的创建、分页、查询和删除。底层用户也可以使用 `openai.NewResponsesClient` 直接获得 `spec.ResponsesClient`。
+
+需要在一条持久连接上连续创建多个响应时，可使用官方 Responses WebSocket：
+
+```go
+socket, err := c.ConnectResponseWebSocket(ctx)
+if err != nil {
+	return err
+}
+defer socket.Close()
+
+err = socket.CreateResponse(ctx, spec.ResponseCreateRequest{
+	Model: "gpt-5.6-sol",
+	Input: "写一句问候语",
+})
+for {
+	event, err := socket.Receive(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Println(event.Type, string(event.Raw))
+	if event.Type == "response.completed" {
+		break
+	}
+}
+```
+
+连接允许一个 reader 与一个 writer 并发；`SendEvent` 也可直接发送后续新增的客户端事件。
+
+| WebSocket 方法 | 说明 |
+| --- | --- |
+| `CreateResponse` | 发送强类型 `response.create` 客户端事件 |
+| `SendEvent` | 发送任意后续客户端事件，便于前向兼容 |
+| `Receive` | 接收下一个服务端事件，并保留完整 `StreamEvent.Raw` |
+| `Close` | 关闭连接 |
 
 也可以通过配置或单次 Option 显式设置：
 
@@ -266,7 +446,7 @@ resp, err = c.ContinueResponse(
 )
 ```
 
-Chat Completions 的工具结果可用 `spec.NewToolMessage(toolCallID, content)` 追加到 `messages`。
+Chat Completions 可使用 `NewSystemMessage`、`NewUserMessage`、`NewAssistantMessage`、`NewUserPartsMessage` 构造消息，工具结果使用 `NewToolMessage` 追加到 `messages`。
 
 ### 完整流式事件
 
@@ -287,9 +467,29 @@ resp, err := c.SendResponse(
 )
 ```
 
-`llm.Config.Parameters` 会原样透传两种 API 的扩展参数；Responses 模式下 `max_tokens` 会自动转换为 `max_output_tokens`。未知的新 output item 或事件不会丢失，可从 `RawResponse` 或 `StreamEvent.Raw` 读取。
+`llm.Config.Parameters` 会原样透传两种 API 的扩展参数；Responses 模式下 `max_tokens` 会自动转换为 `max_output_tokens`。每个 `ResponseOutputItem`、内容 part 和 SSE 事件都保留 `Raw`，未知字段可以无损读取并重新发送；完整 HTTP JSON 仍位于 `RawResponse`。
 
-> `poke2api.com` 是第三方兼容服务。客户端支持上述 OpenAI 协议结构，不代表第三方服务一定实现 `previous_response_id`、MCP、hosted tools、文件或全部事件类型，请以该服务的实际响应为准。
+### 请求 Options 与底层客户端配置
+
+| 分类 | Options |
+| --- | --- |
+| 模型与采样 | `WithModel`、`WithTemperature`、`WithMaxTokens`、`WithTopP` |
+| 推理 | `WithThinking`、`WithReasoningEffort` |
+| 流式回调 | `WithStreaming`、`WithStreamCallback`、`WithReasoningCallback`、`WithEventCallback` |
+| Responses 输入与状态 | `WithResponseInput`、`WithInstructions`、`WithPreviousResponseID` |
+| Responses 托管搜索 | `WithWebSearch` |
+| 扩展字段 | `WithParameters`、`WithParameter`、`WithProvider` |
+| 翻译 | `WithTranslation` |
+| 文生图请求 | `WithText2Image`、`WithText2ImageParameters` |
+| 文生图参数 | `WithText2ImageSize`、`WithText2ImageWatermark`、`WithText2ImageNegativePrompt`、`WithText2ImagePromptExtend`、`WithText2ImageCount` |
+
+直接创建底层 OpenAI client 时，可使用 `WithAPIKey`、`WithAPIURL`、`WithHTTPClient` 和 `WithTimeout`；`NewClientConfig` 与 `NewRequestConfig` 可分别创建底层客户端配置和单次请求配置。可选布尔字段可以使用 `Bool`，结构化输出可用 `NewResponseJSONSchemaFormat` 快速构造严格的 `json_schema` format。
+
+> 第三方兼容服务（例如 `poke2api.com`）不一定实现 `previous_response_id`、MCP、hosted tools、文件或全部事件类型；本库支持上述 OpenAI 协议结构，但实际能力仍以服务商为准。
+
+OpenAI 官方参考：[Responses API](https://developers.openai.com/api/docs/api-reference/responses)、[Images and vision](https://developers.openai.com/api/docs/guides/images-vision)。
+
+需要绕过有状态 `client.Client` 时，可以直接使用 `openai.NewClient` 获得通用 Chat client，或使用 `openai.NewResponsesClient` 获得完整 `spec.ResponsesClient`。
 
 ## 🔍 文档/多模态 OCR 与本地文件上传 (New 🚀)
 
@@ -333,10 +533,10 @@ func main() {
 	}
 
 	// 2. 调用并指定 OCR 任务参数 (如 document_parsing 或 advanced_recognition)
-	resp, err := c.SendPartsNoHistory(
+	resp, err := c.SendOCR(
 		context.Background(),
 		localPart,
-		spec.WithParameter("ocr_options", map[string]any{"task": "document_parsing"}),
+		"document_parsing",
 	)
 	if err != nil {
 		panic(err)
@@ -360,18 +560,71 @@ func main() {
 
 ### `client.Client` 方法
 
-| 方法 | 说明 | 适用场景 |
-| --- | --- | --- |
-| **`Send`** | 发送消息，**记录历史**，等待完整回复 | 常规多轮非流式对话 |
-| **`SendStream`** | 发送消息，**记录历史**，流式回调 | 常规多轮流式对话 (打字机) |
-| **`SendText2Image`** | 发送提示词，触发 **文生图** 任务 | AI 画图、视觉生成 (返回图片URL) |
-| **`SendNoHistory`** | 发送消息，**携带**历史但不记录本次 | 基于上下文的临时追问 |
-| **`SendStreamNoHistory`** | 发送消息，**不携带**且不记录历史 | 独立的一次性任务 (如翻译/搜索) |
-| **`SendOCR`** | 传入文件 Part，发送 OCR 识别请求 | 细粒度控制的多模态文件 OCR |
-| **`SendOCRURL`** | 传入公网 URL，发送 OCR 识别请求 | 快速公网文档 OCR 解析 |
-| **`SendOCRLocal`** | 传入本地路径，自动编码并发送 OCR 请求 | 快速本地文档 OCR 解析 (自动 Base64) |
-| **`SendOCRBytes`** | 传入二进制字节流 `[]byte`，发送 OCR 请求 | 内存/流式二进制文档 OCR 解析 |
-| **`ResetHistory`** | 清空对话历史 | 重置会话 |
+使用 `client.New(llm.Config{...})` 创建客户端。下面列出 `Client` 当前全部公开方法。
+
+#### 对话、历史与多模态
+
+| 方法 | 说明 |
+| --- | --- |
+| `Send` | 发送文本、携带并记录历史，返回完整响应 |
+| `SendStream` | 发送文本、携带并记录历史，通过回调接收文本增量 |
+| `SendNoHistory` | 携带已有历史，但不记录本轮输入和输出 |
+| `SendStreamNoHistory` | 不携带且不记录历史的流式单次请求 |
+| `SendParts` | 发送并记录由文本、图片等组成的多模态 parts |
+| `SendStreamParts` | 发送并记录多模态 parts，流式接收文本 |
+| `SendPartsNoHistory` | 不携带且不记录历史的多模态请求 |
+| `SendImageURL` | 图片 URL 问答快捷方法，记录历史 |
+| `SendImageBase64` | Base64 图片问答快捷方法，记录历史 |
+| `SendText` | `Send` 的文本快捷封装；失败时返回兼容性的错误文案 |
+| `SendByMemory` | 将外部 memory JSON 与用户输入组合后发送 |
+| `ResetHistory` | 清空历史并重新放入系统提示词 |
+| `GetHistory` | 返回当前对话历史 |
+
+#### Responses 创建与高级能力
+
+| 方法 | 说明 |
+| --- | --- |
+| `SendResponse` | 直接发送 Responses `input`，不修改本地聊天历史 |
+| `CreateResponse` | 使用完整 `ResponseCreateRequest` 创建响应 |
+| `ContinueResponse` | 使用 `previous_response_id` 延续响应 |
+| `SendWebSearch` | 使用托管 `web_search` 工具创建响应 |
+| `GenerateImage` | 使用 Responses `image_generation` 工具生成图片 |
+| `ConnectResponseWebSocket` | 建立持久 Responses WebSocket 连接 |
+
+#### Responses 生命周期
+
+| 方法 | 说明 |
+| --- | --- |
+| `RetrieveResponse` | 获取响应；支持流式续传及 `starting_after` |
+| `DeleteResponse` | 删除已存储响应 |
+| `CancelResponse` | 取消后台响应 |
+| `ListResponseInputItems` | 分页读取响应的原始输入 items |
+| `CountResponseInputTokens` | 在创建响应前估算输入 token |
+| `CompactResponse` | 压缩长上下文并返回 compaction items |
+
+#### Conversations 与 Conversation Items
+
+| 方法 | 说明 |
+| --- | --- |
+| `CreateConversation` | 创建持久 conversation |
+| `RetrieveConversation` | 查询 conversation |
+| `UpdateConversation` | 更新 conversation metadata |
+| `DeleteConversation` | 删除 conversation |
+| `CreateConversationItems` | 向 conversation 追加 items |
+| `ListConversationItems` | 分页读取 conversation items |
+| `RetrieveConversationItem` | 查询单个 conversation item |
+| `DeleteConversationItem` | 删除单个 conversation item |
+
+#### 其他模型能力
+
+| 方法 | 说明 |
+| --- | --- |
+| `SendEmbedding` | 生成单条或批量文本向量；需要 provider 实现 Embedding |
+| `SendText2Image` | DashScope 使用异步文生图；OpenAI 使用 Responses 图像生成工具 |
+| `SendOCR` | 使用自定义 file part 和 OCR 任务参数识别文档 |
+| `SendOCRURL` | OCR 公网文档 URL |
+| `SendOCRLocal` | 读取本地文档并编码后执行 OCR |
+| `SendOCRBytes` | 使用内存字节执行 OCR |
 
 ### `llm.Config` 配置项
 
@@ -382,9 +635,22 @@ func main() {
 | `APIKey` | API 密钥 |
 | `APIURL` | (可选) 自定义接口地址，用于代理或私有部署 |
 | `Timeout` | (可选) 完整 HTTP 请求超时，默认 10 分钟，例如 `15*time.Minute` |
+| `SystemPrompt` | (可选) 系统预设人设；Responses 下可作为默认 instructions |
 | `Thinking` | (可选) `llm.Thinking()` 开启思考模式适配 |
 | `ReasoningEffort` | (可选) 思考等级，如 `llm.ReasoningEffortLow`、`llm.ReasoningEffortMedium`、`llm.ReasoningEffortHigh` |
-| `SystemPrompt` | (可选) 系统预设人设 |
+| `Parameters` | 两种协议的扩展请求字段；Responses 自动把 `max_tokens` 映射为 `max_output_tokens` |
+| `ResponseInput` | Responses 模式的默认 `input` |
+| `Instructions` | Responses 模式的默认 instructions，可为字符串或结构化输入 |
+| `PreviousResponseID` | Responses 连续对话的默认前一响应 ID |
+| `WebSearch` | 默认 Responses Web Search 配置 |
+| `Translation` | 翻译任务配置 |
+| `StreamCallback` | 文本输出增量回调 |
+| `ReasoningCallback` | 推理摘要增量回调 |
+| `EventCallback` | 所有 Responses SSE 事件或 Chat stream chunk 回调 |
+| `Text2Image` | 开启文生图模式 |
+| `ImageEdit` | 开启图片编辑模式（由对应 provider 实现） |
+| `WebExtractor` | 网页抓取、联网搜索和代码解释器组合配置 |
+| `ProviderOpts` | provider 专属扩展配置 |
 
 ## 💡 高级用法
 
@@ -410,8 +676,17 @@ c, _ := client.New(llm.Config{
 
 如果您不需要创建 Client 对象，也可以直接使用 `llm` 包提供的函数式接口：
 
+| 函数 | 说明 |
+| --- | --- |
+| `GetClient` | 根据 `llm.Config` 创建底层 provider client |
+| `ChatMessages` | 使用完整 `[]spec.Message` 发起请求 |
+| `Chat` | 使用单条用户文本发起请求并返回 `*spec.Response` |
+| `ChatText` | 使用单条用户文本发起请求并只返回文本 |
+| `Thinking` | 返回启用思考模式的 `*bool` |
+| `NoThinking` | 返回关闭思考模式的 `*bool` |
+
 ```go
-import "github.com/ievan-lhr/go-llm-client/llm"
+import "github.com/iEvan-lhr/go-llm-client/llm"
 
 // 单次直接调用
 resp, err := llm.ChatText(context.Background(), "简单介绍一下 Go 语言", llm.Config{
