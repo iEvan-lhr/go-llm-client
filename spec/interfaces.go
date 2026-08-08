@@ -12,6 +12,14 @@ type Client interface {
 	Model(name string) Model
 }
 
+// ImagesClient is implemented by providers that expose OpenAI-compatible
+// image generation and image editing endpoints.
+type ImagesClient interface {
+	Client
+	CreateImage(ctx context.Context, request ImageGenerationRequest) (*ImageResponse, error)
+	EditImage(ctx context.Context, request ImageEditRequest) (*ImageResponse, error)
+}
+
 // ResponsesClient is implemented by providers that expose OpenAI's Responses
 // REST API in addition to the generic Model/Chat abstraction.
 type ResponsesClient interface {

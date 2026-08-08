@@ -6,7 +6,7 @@
 
 * **统一接口**：一套代码适配 Dashscope (阿里云百炼)、OpenAI 及各类私有化部署模型（Generic）。
 * **客户端模式 (Client)**：内置上下文记忆管理，像聊天一样简单地调用。
-* **多模态输入与图像生成 (New 🚀)**：支持图片 URL/Base64/本地文件、音频、文档和文件 ID 输入，并支持 DashScope 异步文生图与 OpenAI Responses `image_generation`。
+* **多模态输入与图像生成 (New 🚀)**：支持图片 URL/Base64/本地文件、音频、文档和文件 ID 输入，并支持 DashScope 异步文生图、OpenAI Responses `image_generation` 以及独立的 Images 生成/编辑 API。
 * **流式响应 (Streaming)**：支持打字机效果，提供便捷的回调函数 (`StreamCallback`)。
 * **灵活的对话控制**：支持带历史对话、不带历史对话 (`SendNoHistory`) 以及流式不记录 (`SendStreamNoHistory`) 等多种模式。
 * **思考模式支持**：针对 DeepSeek R1 / Qwen 等推理模型，自动处理 `<think>` 标签或特定参数。
@@ -346,6 +346,67 @@ images := resp.Responses.ImageGenerationResults() // base64 图片列表
 
 `SendText2Image` 在 OpenAI provider 下也会自动改用 Responses `image_generation` 工具，其他 provider 保持原行为。
 
+### 独立 Images API：生成与编辑
+
+`CreateImage` 和 `EditImage` 不经过 Responses，分别直连 `/v1/images/generations` 与 `/v1/images/edits`。`APIURL` 可以配置为 API 根路径、`/chat/completions`、`/responses` 或 Images 端点，客户端会派生出正确路径。
+
+```go
+c, err := client.New(llm.Config{
+	Provider: "openai",
+	Model:    "gpt-image-2",
+	APIKey:   os.Getenv("POKE_API_KEY"),
+	APIURL:   "https://www.poke2api.com/v1",
+})
+if err != nil {
+	return err
+}
+
+generated, err := c.CreateImage(ctx, spec.ImageGenerationRequest{
+	Prompt:         "一座位于雪山脚下的未来观测站，夜空可见银河，电影感写实摄影，无文字，无人物",
+	Size:           "1024x1024",
+	Quality:        "high",
+	ResponseFormat: "b64_json",
+})
+if err != nil {
+	return err
+}
+images := generated.Base64Images()
+
+reference, err := spec.NewImageFile("reference.png", "image/png")
+if err != nil {
+	return err
+}
+edited, err := c.EditImage(ctx, spec.ImageEditRequest{
+	Prompt:         "保留主体，把背景改为克制的黑白编辑风格，并加入少量深蓝信号色",
+	Size:           "1024x1024",
+	Quality:        "high",
+	ResponseFormat: "b64_json",
+	Image:          reference,
+})
+if err != nil {
+	return err
+}
+editedImages := edited.Base64Images()
+```
+
+请求中省略 `Model` 时会使用 `llm.Config.Model`。已有内存图片可以通过 `spec.NewImageFileBytes` 传入；需要 mask 时设置 `ImageEditRequest.Mask`。底层无状态用法可使用 `openai.NewImagesClient` 获取 `spec.ImagesClient`。
+
+#### 真实图片生成测试
+
+根目录的 `openai_llm_test.go` 包含 `TestOpenAIImageGeneration`。该测试会真实调用 Images API，优先解码 `b64_json`；兼容网关若返回 `url`，测试会下载图片。解码后还会校验 MIME 类型，并把图片保留在本地。PowerShell 运行方式：
+
+```powershell
+$env:OPENAI_TEST_API_KEY = $env:POKE_API_KEY
+$env:OPENAI_TEST_BASE_URL = "https://www.poke2api.com/v1"
+$env:OPENAI_TEST_IMAGE_MODEL = "gpt-image-2"
+$env:OPENAI_TEST_IMAGE_OUTPUT = "openai-image-generation-test.png"
+go test -run '^TestOpenAIImageGeneration$' -count=1 -v .
+```
+
+还可以通过 `OPENAI_TEST_IMAGES_URL` 单独覆盖生成端点。测试使用无人物、无角色 IP 的雪山未来观测站提示词；带有受保护角色的提示词可能被兼容网关以 `content_policy_violation` 拦截。
+
+2026-08-09 使用 POKE 兼容端点实测通过：耗时 23.17 秒，响应返回 `b64_json`，解码得到 2,835,660 字节的 PNG，输出到 `openai-image-generation-test.png`。请求指定 `1024x1024/high`，但该网关响应及实际文件为 `1536x1024`、`quality=auto`，说明兼容服务可能会归一化或忽略部分 Images 参数。
+
 ### 后台任务、续流与生命周期
 
 ```go
@@ -487,9 +548,9 @@ resp, err := c.SendResponse(
 
 > 第三方兼容服务（例如 `poke2api.com`）不一定实现 `previous_response_id`、MCP、hosted tools、文件或全部事件类型；本库支持上述 OpenAI 协议结构，但实际能力仍以服务商为准。
 
-OpenAI 官方参考：[Responses API](https://developers.openai.com/api/docs/api-reference/responses)、[Images and vision](https://developers.openai.com/api/docs/guides/images-vision)。
+OpenAI 官方参考：[Responses API](https://developers.openai.com/api/docs/api-reference/responses)、[Images and vision](https://developers.openai.com/api/docs/guides/images-vision)、[GPT Image 2](https://developers.openai.com/api/docs/models/gpt-image-2)。
 
-需要绕过有状态 `client.Client` 时，可以直接使用 `openai.NewClient` 获得通用 Chat client，或使用 `openai.NewResponsesClient` 获得完整 `spec.ResponsesClient`。
+需要绕过有状态 `client.Client` 时，可以直接使用 `openai.NewClient` 获得通用 Chat client，使用 `openai.NewResponsesClient` 获得完整 `spec.ResponsesClient`，或使用 `openai.NewImagesClient` 获得 `spec.ImagesClient`。
 
 ## 🔍 文档/多模态 OCR 与本地文件上传 (New 🚀)
 
@@ -601,6 +662,13 @@ func main() {
 | `ListResponseInputItems` | 分页读取响应的原始输入 items |
 | `CountResponseInputTokens` | 在创建响应前估算输入 token |
 | `CompactResponse` | 压缩长上下文并返回 compaction items |
+
+#### Images API
+
+| 方法 | 说明 |
+| --- | --- |
+| `CreateImage` | 调用独立的 `/images/generations` JSON 接口 |
+| `EditImage` | 调用独立的 `/images/edits` multipart 接口 |
 
 #### Conversations 与 Conversation Items
 

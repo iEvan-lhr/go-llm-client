@@ -45,6 +45,12 @@ func (r *Requester) Do(ctx context.Context, method, url string, headers http.Hea
 		body = bytes.NewReader(jsonBody)
 	}
 
+	return r.DoBody(ctx, method, url, headers, body)
+}
+
+// DoBody executes a request whose body and content type have already been
+// prepared by the caller, for example a multipart/form-data request.
+func (r *Requester) DoBody(ctx context.Context, method, url string, headers http.Header, body io.Reader) ([]byte, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, fmt.Errorf("requester: failed to create request: %w", err)
