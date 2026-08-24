@@ -20,6 +20,13 @@ type ImagesClient interface {
 	EditImage(ctx context.Context, request ImageEditRequest) (*ImageResponse, error)
 }
 
+// RealtimeTranscriptionClient is implemented by providers that support
+// bidirectional realtime speech recognition.
+type RealtimeTranscriptionClient interface {
+	Client
+	StartRealtimeTranscription(ctx context.Context, request RealtimeTranscriptionRequest) (RealtimeTranscriptionSession, error)
+}
+
 // ResponsesClient is implemented by providers that expose OpenAI's Responses
 // REST API in addition to the generic Model/Chat abstraction.
 type ResponsesClient interface {

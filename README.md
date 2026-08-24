@@ -7,6 +7,7 @@
 * **统一接口**：一套代码适配 Dashscope (阿里云百炼)、OpenAI 及各类私有化部署模型（Generic）。
 * **客户端模式 (Client)**：内置上下文记忆管理，像聊天一样简单地调用。
 * **多模态输入与图像生成 (New 🚀)**：支持图片 URL/Base64/本地文件、音频、文档和文件 ID 输入，并支持 DashScope 异步文生图、OpenAI Responses `image_generation` 以及独立的 Images 生成/编辑 API。
+* **DashScope 实时语音识别**：统一支持 Qwen-Audio 3.0、Fun-ASR、Qwen3-ASR-Realtime 与 Paraformer 的双向 WebSocket 音频流和实时转写事件。
 * **流式响应 (Streaming)**：支持打字机效果，提供便捷的回调函数 (`StreamCallback`)。
 * **灵活的对话控制**：支持带历史对话、不带历史对话 (`SendNoHistory`) 以及流式不记录 (`SendStreamNoHistory`) 等多种模式。
 * **思考模式支持**：针对 DeepSeek R1 / Qwen 等推理模型，自动处理 `<think>` 标签或特定参数。
@@ -132,6 +133,121 @@ func main() {
 }
 
 ```
+
+## DashScope 实时语音识别
+
+外部应用推荐使用 `StreamRealtimeTranscription`：传入麦克风、FFmpeg stdout、网络连接等任意 `io.Reader`，客户端会自动完成建连、音频分块、并发接收、结束任务、等待最终结果和关闭会话：
+
+```go
+err := c.StreamRealtimeTranscription(
+	ctx,
+	microphoneReader,
+	spec.RealtimeTranscriptionRequest{
+		Format:        "pcm",
+		SampleRate:    16000,
+		LanguageHints: []string{"zh", "en"},
+	},
+	spec.RealtimeTranscriptionStreamOptions{
+		ChunkSize: 3200, // 16kHz/16-bit/单声道 PCM 的 100ms 音频
+		OnText: func(ctx context.Context, text string, final bool) error {
+			fmt.Printf("text=%q final=%t\n", text, final)
+			return nil
+		},
+		OnEvent: func(ctx context.Context, event spec.RealtimeTranscriptionEvent) error {
+			// 可选：接收时间戳、情绪、用量和原始服务端事件。
+			return nil
+		},
+	},
+)
+```
+
+输入流返回 `io.EOF` 后，该方法会自动发送结束指令并等待 `Terminal` 事件。若音频源的 `Read` 会长期阻塞，应用在取消 `ctx` 时也应关闭该音频源。Qwen3 Manual 模式会把整个输入流作为一句话并自动 `Commit`；需要在一个连接内手动提交多句话时，请使用下面的底层会话接口。
+
+`StartRealtimeTranscription` 会根据模型自动选择 DashScope 的 WebSocket 协议，并在服务端确认任务启动后返回。一个 goroutine 可以持续调用 `Receive`，另一个 goroutine 同时调用 `SendAudio`。以下底层示例适用于 `qwen-audio-3.0-asr-flash-streaming`、`fun-asr-realtime` 和 Paraformer 系列：
+
+```go
+c, err := client.New(llm.Config{
+	Provider: "dashscope",
+	Model:    "qwen-audio-3.0-asr-flash-streaming",
+	APIKey:   os.Getenv("DASHSCOPE_API_KEY"),
+	// 推荐填写业务空间专属地址；模型需要另一套协议时会自动切换路径。
+	APIURL: "wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+})
+if err != nil {
+	return err
+}
+
+heartbeat := true
+session, err := c.StartRealtimeTranscription(ctx, spec.RealtimeTranscriptionRequest{
+	Format:        "pcm",
+	SampleRate:    16000,
+	LanguageHints: []string{"zh", "en"},
+	Heartbeat:     &heartbeat,
+	Vocabulary:    map[string]int{"DashScope": 5},
+})
+if err != nil {
+	return err
+}
+defer session.Close()
+
+receiveDone := make(chan error, 1)
+go func() {
+	for {
+		event, err := session.Receive(ctx)
+		if err != nil {
+			receiveDone <- err
+			return
+		}
+		if event.Error != nil {
+			receiveDone <- event.Error
+			return
+		}
+		if event.Transcript != "" {
+			fmt.Printf("text=%q final=%t\n", event.Transcript, event.Final)
+		}
+		if event.Terminal {
+			receiveDone <- nil
+			return
+		}
+	}
+}()
+
+// microphoneChunks 中每个 []byte 是一帧实时音频，例如 100ms 的
+// 16kHz/16-bit/单声道 PCM 为 3200 字节。
+for chunk := range microphoneChunks {
+	if err := session.SendAudio(ctx, chunk); err != nil {
+		return err
+	}
+}
+if err := session.Finish(ctx); err != nil {
+	return err
+}
+if err := <-receiveDone; err != nil {
+	return err
+}
+```
+
+Qwen3-ASR-Realtime 使用同一个接口。VAD 模式可设置 `TurnDetection`；Manual 模式应在每段语音后调用 `Commit`：
+
+```go
+session, err := c.StartRealtimeTranscription(ctx, spec.RealtimeTranscriptionRequest{
+	Model:      "qwen3-asr-flash-realtime",
+	Format:     "pcm", // Qwen3 推荐 pcm 或 opus
+	SampleRate: 16000,
+	Language:   "zh", // 留空时自动检测
+	Manual:     true,
+})
+if err != nil {
+	return err
+}
+defer session.Close()
+
+_ = session.SendAudio(ctx, audioChunk)
+_ = session.Commit(ctx) // Manual 模式提交当前语句；VAD 模式不调用
+_ = session.Finish(ctx)
+```
+
+`RealtimeTranscriptionEvent.Type` 保留服务端原始事件名，`Raw` 保留完整 JSON；`Transcript`/`Final` 提供统一文本视图，`Terminal` 标记整个任务或会话已经结束。任务协议还会解析 `Sentence` 的句级、字级时间戳及 `Usage`，Qwen3 事件会解析 `StableText`、`Stash`、`Language` 和 `Emotion`。`Parameters`、`Input`、`Session` 与 `TurnDetection.ExtraFields` 可透传后续新增字段。
 
 ## OpenAI Chat Completions 与 Responses API
 
@@ -687,6 +803,8 @@ func main() {
 
 | 方法 | 说明 |
 | --- | --- |
+| `StreamRealtimeTranscription` | 从 `io.Reader` 自动分块发送音频、回调转写结果并管理完整会话生命周期 |
+| `StartRealtimeTranscription` | 建立 DashScope 双向实时语音识别会话并流式收发音频/转写事件 |
 | `SendEmbedding` | 生成单条或批量文本向量；需要 provider 实现 Embedding |
 | `SendText2Image` | DashScope 使用异步文生图；OpenAI 使用 Responses 图像生成工具 |
 | `SendOCR` | 使用自定义 file part 和 OCR 任务参数识别文档 |
