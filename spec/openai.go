@@ -133,9 +133,9 @@ const (
 	WebSearchReturnTokenBudgetUnlimited = "unlimited"
 )
 
-// WebSearchConfig configures OpenAI's hosted web_search tool. It is supported
-// only by the Responses API; provider-specific fields can still be supplied
-// through WithParameter.
+// WebSearchConfig configures model-hosted search. Providers translate the
+// common fields to Responses tools, Chat Completions web_search_options, or a
+// provider-specific web_search tool.
 type WebSearchConfig struct {
 	SearchContextSize  string
 	ReturnTokenBudget  string
@@ -147,6 +147,19 @@ type WebSearchConfig struct {
 	IncludeSources     bool
 	IncludeResults     bool
 	ToolChoice         any
+
+	// The fields below configure ZHIPU's hosted web_search tool. ContentSize
+	// falls back to SearchContextSize when it is not set.
+	SearchEngine        string
+	SearchQuery         string
+	SearchIntent        *bool
+	Count               int
+	SearchDomainFilter  string
+	SearchRecencyFilter string
+	ContentSize         string
+	ResultSequence      string
+	RequireSearch       *bool
+	SearchPrompt        string
 }
 
 // WebSearchFilters limits or excludes domains. Domains should not include a
@@ -204,8 +217,8 @@ type WebSearchAction struct {
 	Sources []WebSearchSource `json:"sources,omitempty"`
 }
 
-// WebSearchResult exposes optional raw search results, including image
-// results requested through web_search_call.results.
+// WebSearchResult exposes hosted search results from Responses or compatible
+// Chat Completions providers, including optional image and page metadata.
 type WebSearchResult struct {
 	Type             string `json:"type,omitempty"`
 	URL              string `json:"url,omitempty"`
@@ -214,9 +227,14 @@ type WebSearchResult struct {
 	ThumbnailURL     string `json:"thumbnail_url,omitempty"`
 	SourceWebsiteURL string `json:"source_website_url,omitempty"`
 	Caption          string `json:"caption,omitempty"`
+	Content          string `json:"content,omitempty"`
+	Media            string `json:"media,omitempty"`
+	Icon             string `json:"icon,omitempty"`
+	Refer            string `json:"refer,omitempty"`
+	PublishDate      string `json:"publish_date,omitempty"`
 }
 
-// WebSearchCall is the typed view of a Responses web_search_call output item.
+// WebSearchCall is the typed view of a hosted model search operation.
 type WebSearchCall struct {
 	ID      string            `json:"id,omitempty"`
 	Status  string            `json:"status,omitempty"`

@@ -20,9 +20,9 @@ type Response struct {
 	ChatCompletion *ChatCompletionResponse
 	Responses      *ResponsesAPIResponse
 
-	// WebSearchCalls and Citations provide typed access to Responses web
-	// search metadata while the complete wire response remains available in
-	// Responses and RawResponse.
+	// WebSearchCalls and Citations provide typed access to hosted search
+	// metadata across Responses and Chat Completions while the complete wire
+	// response remains available in RawResponse.
 	WebSearchCalls []WebSearchCall
 	Citations      []URLCitation
 

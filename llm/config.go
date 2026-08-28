@@ -38,7 +38,9 @@ type Config struct {
 	ResponseInput      any
 	Instructions       any
 	PreviousResponseID string
-	WebSearch          *spec.WebSearchConfig
+	// WebSearch configures provider-hosted search for Responses or Chat
+	// Completions, depending on the selected provider and endpoint.
+	WebSearch *spec.WebSearchConfig
 	//add
 	Translation *spec.TranslationOptions
 	// StreamCallback 用于接收流式数据的回调函数

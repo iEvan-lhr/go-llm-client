@@ -266,8 +266,8 @@ func WithPreviousResponseID(id string) Option {
 	}
 }
 
-// WithWebSearch enables OpenAI's hosted web_search tool for a Responses API
-// request. It can coexist with function tools supplied through Parameters.
+// WithWebSearch enables provider-supported model-hosted search for Responses
+// or Chat Completions. It can coexist with tools supplied through Parameters.
 func WithWebSearch(config WebSearchConfig) Option {
 	return func(r *RequestConfig) {
 		copy := config

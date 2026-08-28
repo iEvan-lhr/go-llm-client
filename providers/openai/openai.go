@@ -61,9 +61,6 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 	}
 
 	responsesEndpoint := isResponsesURL(m.client.config.APIURL)
-	if config.WebSearch != nil && !responsesEndpoint {
-		return nil, fmt.Errorf("openai provider: web_search requires a /responses endpoint")
-	}
 	if responsesEndpoint {
 		return m.responses(ctx, messages, config)
 	}
@@ -86,6 +83,11 @@ func (m *modelImpl) chatCompletions(ctx context.Context, messages []spec.Message
 	}
 	if effort := effectiveReasoningEffort(config); effort != "" {
 		requestBody["reasoning_effort"] = effort
+	}
+	if config.WebSearch != nil {
+		if err := applyChatWebSearch(requestBody, *config.WebSearch); err != nil {
+			return nil, err
+		}
 	}
 	if config.Streaming {
 		requestBody["stream"] = true
@@ -118,6 +120,7 @@ func (m *modelImpl) chatCompletions(ctx context.Context, messages []spec.Message
 		Message:        responseMessage,
 		Usage:          apiResp.Usage,
 		ChatCompletion: &apiResp,
+		Citations:      chatCitations(responseMessage.Annotations),
 		RawResponse:    rawBody,
 	}, nil
 }
@@ -201,6 +204,7 @@ func (m *modelImpl) streamChatCompletions(ctx context.Context, requestBody map[s
 	var content strings.Builder
 	var refusal strings.Builder
 	var reasoning strings.Builder
+	var annotations []json.RawMessage
 	role := spec.RoleAssistant
 	toolCalls := make(map[int]*spec.ToolCall)
 	toolOrder := make([]int, 0)
@@ -266,6 +270,9 @@ func (m *modelImpl) streamChatCompletions(ctx context.Context, requestBody map[s
 					}
 				}
 			}
+			if len(delta.Annotations) > 0 {
+				annotations = append(annotations, delta.Annotations...)
+			}
 			mergeToolCallDeltas(toolCalls, &toolOrder, delta.ToolCalls)
 		}
 		return nil
@@ -280,6 +287,7 @@ func (m *modelImpl) streamChatCompletions(ctx context.Context, requestBody map[s
 		Refusal:          refusal.String(),
 		ReasoningContent: reasoning.String(),
 		ToolCalls:        orderedToolCalls(toolCalls, toolOrder),
+		Annotations:      annotations,
 	}
 	if message.Content == "" {
 		message.Content = message.Refusal
@@ -299,6 +307,7 @@ func (m *modelImpl) streamChatCompletions(ctx context.Context, requestBody map[s
 		Message:        message,
 		Usage:          completion.Usage,
 		ChatCompletion: &completion,
+		Citations:      chatCitations(message.Annotations),
 		RawResponse:    rawBody,
 	}, nil
 }
@@ -514,6 +523,58 @@ func applyWebSearch(requestBody map[string]any, config spec.WebSearchConfig) err
 		requestBody["include"] = include
 	}
 	return nil
+}
+
+func applyChatWebSearch(requestBody map[string]any, config spec.WebSearchConfig) error {
+	options := make(map[string]any)
+	if existing := requestBody["web_search_options"]; existing != nil {
+		encoded, err := json.Marshal(existing)
+		if err != nil {
+			return fmt.Errorf("openai provider: encode web_search_options: %w", err)
+		}
+		if err := json.Unmarshal(encoded, &options); err != nil {
+			return fmt.Errorf("openai provider: web_search_options must be an object: %w", err)
+		}
+	}
+	if config.SearchContextSize != "" {
+		options["search_context_size"] = config.SearchContextSize
+	}
+	if config.UserLocation != nil {
+		location := *config.UserLocation
+		locationType := location.Type
+		if locationType == "" {
+			locationType = "approximate"
+		}
+		approximate := map[string]any{}
+		if location.Country != "" {
+			approximate["country"] = location.Country
+		}
+		if location.City != "" {
+			approximate["city"] = location.City
+		}
+		if location.Region != "" {
+			approximate["region"] = location.Region
+		}
+		if location.Timezone != "" {
+			approximate["timezone"] = location.Timezone
+		}
+		options["user_location"] = map[string]any{
+			"type":        locationType,
+			"approximate": approximate,
+		}
+	}
+	requestBody["web_search_options"] = options
+	return nil
+}
+
+func chatCitations(annotations []json.RawMessage) []spec.URLCitation {
+	citations := make([]spec.URLCitation, 0, len(annotations))
+	for _, annotation := range annotations {
+		if citation, ok := parseURLCitation(annotation); ok {
+			citations = append(citations, citation)
+		}
+	}
+	return citations
 }
 
 func normalizeJSONArray(value any, field string) ([]any, error) {

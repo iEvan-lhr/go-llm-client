@@ -23,13 +23,14 @@ const (
 
 // Message 代表一次对话中的单条消息
 type Message struct {
-	Role       Role          `json:"role"`
-	Content    string        `json:"content"`
-	Parts      []ContentPart `json:"content_part"`
-	Name       string        `json:"name,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall    `json:"tool_calls,omitempty"`
-	Refusal    string        `json:"refusal,omitempty"`
+	Role        Role              `json:"role"`
+	Content     string            `json:"content"`
+	Parts       []ContentPart     `json:"content_part"`
+	Name        string            `json:"name,omitempty"`
+	ToolCallID  string            `json:"tool_call_id,omitempty"`
+	ToolCalls   []ToolCall        `json:"tool_calls,omitempty"`
+	Refusal     string            `json:"refusal,omitempty"`
+	Annotations []json.RawMessage `json:"annotations,omitempty"`
 	// ReasoningContent stores provider-specific reasoning text.
 	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
@@ -59,10 +60,16 @@ type ImageURL struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// VideoURL identifies a remote video used by multimodal chat providers.
+type VideoURL struct {
+	URL string `json:"url"`
+}
+
 type ContentPart struct {
 	Type       string              `json:"type"`
 	Text       string              `json:"text,omitempty"`
 	ImageURL   *ImageURL           `json:"image_url,omitempty"`
+	VideoURL   *VideoURL           `json:"video_url,omitempty"`
 	FileURL    string              `json:"file_url,omitempty"`
 	FileID     string              `json:"file_id,omitempty"`
 	FileData   string              `json:"file_data,omitempty"`
@@ -72,13 +79,14 @@ type ContentPart struct {
 
 func (m *Message) MarshalJSON() ([]byte, error) {
 	type alias struct {
-		Role             Role       `json:"role"`
-		Content          any        `json:"content"`
-		Name             string     `json:"name,omitempty"`
-		ToolCallID       string     `json:"tool_call_id,omitempty"`
-		ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
-		Refusal          string     `json:"refusal,omitempty"`
-		ReasoningContent string     `json:"reasoning_content,omitempty"`
+		Role             Role              `json:"role"`
+		Content          any               `json:"content"`
+		Name             string            `json:"name,omitempty"`
+		ToolCallID       string            `json:"tool_call_id,omitempty"`
+		ToolCalls        []ToolCall        `json:"tool_calls,omitempty"`
+		Refusal          string            `json:"refusal,omitempty"`
+		Annotations      []json.RawMessage `json:"annotations,omitempty"`
+		ReasoningContent string            `json:"reasoning_content,omitempty"`
 	}
 
 	var content any
@@ -97,19 +105,21 @@ func (m *Message) MarshalJSON() ([]byte, error) {
 		ToolCallID:       m.ToolCallID,
 		ToolCalls:        m.ToolCalls,
 		Refusal:          m.Refusal,
+		Annotations:      m.Annotations,
 		ReasoningContent: m.ReasoningContent,
 	})
 }
 
 func (m *Message) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Role             Role            `json:"role"`
-		Content          json.RawMessage `json:"content"`
-		Name             string          `json:"name"`
-		ToolCallID       string          `json:"tool_call_id"`
-		ToolCalls        []ToolCall      `json:"tool_calls"`
-		Refusal          string          `json:"refusal"`
-		ReasoningContent string          `json:"reasoning_content"`
+		Role             Role              `json:"role"`
+		Content          json.RawMessage   `json:"content"`
+		Name             string            `json:"name"`
+		ToolCallID       string            `json:"tool_call_id"`
+		ToolCalls        []ToolCall        `json:"tool_calls"`
+		Refusal          string            `json:"refusal"`
+		Annotations      []json.RawMessage `json:"annotations"`
+		ReasoningContent string            `json:"reasoning_content"`
 	}
 
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -121,6 +131,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	m.ToolCallID = raw.ToolCallID
 	m.ToolCalls = raw.ToolCalls
 	m.Refusal = raw.Refusal
+	m.Annotations = raw.Annotations
 	m.ReasoningContent = raw.ReasoningContent
 
 	if len(raw.Content) == 0 || string(raw.Content) == "null" {
@@ -162,6 +173,15 @@ func NewImageURLPart(url string) ContentPart {
 		ImageURL: &ImageURL{
 			URL: url,
 		},
+	}
+}
+
+// NewVideoURLPart creates a remote video content item for providers that
+// support video understanding, such as ZHIPU's vision models.
+func NewVideoURLPart(url string) ContentPart {
+	return ContentPart{
+		Type:     "video_url",
+		VideoURL: &VideoURL{URL: url},
 	}
 }
 

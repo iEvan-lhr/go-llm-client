@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 
 	"github.com/iEvan-lhr/go-llm-client/llm"
@@ -132,13 +133,48 @@ func (c *Client) SendResponse(ctx context.Context, input any, opts ...spec.Optio
 	return c.CreateResponse(ctx, request, opts...)
 }
 
-// SendWebSearch sends a Responses API request with OpenAI's hosted web_search
-// tool enabled.
+// SendWebSearch asks the configured model to search the web and synthesize an
+// answer. The provider translates the request for either Responses or Chat
+// Completions according to its configured endpoint.
 func (c *Client) SendWebSearch(ctx context.Context, input any, config spec.WebSearchConfig, opts ...spec.Option) (*spec.Response, error) {
+	// Preserve the Responses API behavior when the configured endpoint is
+	// explicitly /responses. Chat Completions endpoints (including /v1/chat/
+	// completions) are handled through the normal model path below.
+	if isResponsesEndpoint(c.config.APIURL) {
+		return c.SendResponse(ctx, input, append([]spec.Option{spec.WithWebSearch(config)}, opts...)...)
+	}
+	messages, err := webSearchMessages(input)
+	if err != nil {
+		return nil, err
+	}
+	if c.config.SystemPrompt != "" && (len(messages) == 0 || messages[0].Role != spec.RoleSystem) {
+		messages = append([]spec.Message{spec.NewSystemMessage(c.config.SystemPrompt)}, messages...)
+	}
 	extraOpts := make([]spec.Option, 0, len(opts)+1)
 	extraOpts = append(extraOpts, spec.WithWebSearch(config))
 	extraOpts = append(extraOpts, opts...)
-	return c.SendResponse(ctx, input, extraOpts...)
+	return c.invoke(ctx, messages, nil, extraOpts...)
+}
+
+func isResponsesEndpoint(apiURL string) bool {
+	parsed, err := url.Parse(apiURL)
+	if err != nil {
+		return false
+	}
+	return strings.HasSuffix(strings.TrimRight(parsed.Path, "/"), "/responses")
+}
+
+func webSearchMessages(input any) ([]spec.Message, error) {
+	switch value := input.(type) {
+	case string:
+		return []spec.Message{spec.NewUserMessage(value)}, nil
+	case []spec.ContentPart:
+		return []spec.Message{spec.NewUserPartsMessage(value...)}, nil
+	case []spec.Message:
+		return append([]spec.Message(nil), value...), nil
+	default:
+		return nil, fmt.Errorf("web search input must be a string, []spec.ContentPart, or []spec.Message, got %T", input)
+	}
 }
 
 // ContinueResponse continues a stateful Responses API conversation.

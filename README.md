@@ -1,10 +1,10 @@
 # Go LLM Client
 
-一个轻量、统一且易于扩展的 Go 语言大模型客户端库。旨在屏蔽不同大模型供应商（Dashscope/Qwen, OpenAI, DeepSeek 等）的接口差异，提供统一的**有状态（Stateful）**和**无状态（Stateless）**调用体验。
+一个轻量、统一且易于扩展的 Go 语言大模型客户端库。旨在屏蔽不同大模型供应商（Dashscope/Qwen、OpenAI、DeepSeek、ZHIPU AI 等）的接口差异，提供统一的**有状态（Stateful）**和**无状态（Stateless）**调用体验。
 
 ## ✨ 核心特性
 
-* **统一接口**：一套代码适配 Dashscope (阿里云百炼)、OpenAI 及各类私有化部署模型（Generic）。
+* **统一接口**：一套代码适配 Dashscope (阿里云百炼)、OpenAI、ZHIPU AI（智谱）及各类私有化部署模型（Generic）。
 * **客户端模式 (Client)**：内置上下文记忆管理，像聊天一样简单地调用。
 * **多模态输入与图像生成 (New 🚀)**：支持图片 URL/Base64/本地文件、音频、文档和文件 ID 输入，并支持 DashScope 异步文生图、OpenAI Responses `image_generation` 以及独立的 Images 生成/编辑 API。
 * **DashScope 实时语音识别**：统一支持 Qwen-Audio 3.0、Fun-ASR、Qwen3-ASR-Realtime 与 Paraformer 的双向 WebSocket 音频流和实时转写事件。
@@ -45,7 +45,7 @@ func main() {
     // 1. 初始化客户端
     // 注意：使用 client.New 而不是 llm.New
     c, err := client.New(llm.Config{
-       Provider: "dashscope", // 支持 "dashscope", "openai", "generic"
+       Provider: "dashscope", // 支持 "dashscope", "openai", "zhipu", "generic"
        Model:    "qwen-plus",
        APIKey:   os.Getenv("DASHSCOPE_API_KEY"),
        // 如果是 Dashscope，通常不需要手动设置 APIURL，库内有默认值。
@@ -96,6 +96,57 @@ func main() {
     })
 }
 
+```
+
+## ZHIPU AI（智谱）
+
+将 `Provider` 设置为 `zhipu` 即可使用智谱 Chat Completions。默认请求官方端点 `https://open.bigmodel.cn/api/paas/v4/chat/completions`，通常无需手动设置 `APIURL`：
+
+```go
+c, err := client.New(llm.Config{
+    Provider:        "zhipu",
+    Model:           "glm-5.3",
+    APIKey:          os.Getenv("ZHIPU_API_KEY"),
+    Thinking:        llm.Thinking(),
+    ReasoningEffort: llm.ReasoningEffortHigh,
+    ReasoningCallback: func(ctx context.Context, chunk string) error {
+        fmt.Print(chunk) // 思考内容 reasoning_content
+        return nil
+    },
+    // 智谱新增参数可以直接透传。
+    Parameters: map[string]any{"do_sample": true},
+})
+if err != nil {
+    panic(err)
+}
+
+resp, err := c.SendStreamNoHistory(context.Background(), "解释量子纠缠", func(ctx context.Context, chunk string) error {
+    fmt.Print(chunk) // 最终回答 content
+    return nil
+})
+```
+
+文本、图片、视频、文件和音频输入可分别使用 `NewTextPart`、`NewImageURLPart`、`NewVideoURLPart`、`NewInputFilePart` 和 `NewInputAudioPart` 构造；Function Calling 可通过 `Parameters` 透传标准 `tools` 与 `tool_choice`。响应中的正文、`reasoning_content`、函数调用、结束原因和 token 用量会映射到统一 `spec.Response`，完整服务端响应仍保留在 `RawResponse`。
+
+智谱支持两种联网搜索方式：`SendWebSearch` 让模型在 Chat Completions 中调用 `web_search` 工具；`SearchWeb` 直接调用智谱 `/paas/v4/web_search` 搜索接口并返回结构化结果：
+
+```go
+// 模型搜索并生成回答（Chat Completions）
+answer, err := c.SendWebSearch(context.Background(), "今天有哪些重要 AI 新闻？", spec.WebSearchConfig{
+    SearchEngine:   spec.WebSearchEngineStandard,
+    SearchIntent:   spec.Bool(false),
+    Count:          5,
+    ContentSize:    spec.WebSearchContentSizeMedium,
+    IncludeSources: true,
+})
+
+// 直接获取搜索结果（/paas/v4/web_search）
+results, err := c.SearchWeb(context.Background(), spec.WebSearchRequest{
+    SearchQuery:  "今天 AI 新闻",
+    SearchEngine: spec.WebSearchEngineStandard,
+    SearchIntent: false,
+    Count:        5,
+})
 ```
 
 ## 🎨 图像生成 (Text-to-Image)
@@ -318,9 +369,9 @@ resp, err = c.SendStreamNoHistory(context.Background(), "写一首短诗", func(
 | 本地文档 | `NewInputFileLocalPart` | 读取本地文件并生成文档 data URL |
 | 已上传文档 | `NewInputFileIDPart` | Responses `input_file.file_id` |
 
-### Responses 联网搜索
+### OpenAI 联网搜索（Responses 与 Chat Completions）
 
-OpenAI Responses API 可通过托管的 `web_search` 工具联网。`SendWebSearch` 会保留 `Parameters` 中已有的 Function Calling 工具，并追加联网工具：
+`SendWebSearch` 会根据 `APIURL` 自动选择协议：配置 `/responses` 时追加 Responses `web_search` 工具；配置 `/v1/chat/completions`（或使用 OpenAI provider 默认地址）时发送 `web_search_options`：
 
 ```go
 resp, err := c.SendWebSearch(
@@ -328,12 +379,11 @@ resp, err := c.SendWebSearch(
 	"查询今天的重要 AI 新闻，并标注来源",
 	spec.WebSearchConfig{
 		SearchContextSize: spec.WebSearchContextSizeMedium,
-		ExternalWebAccess: spec.Bool(true),
-		Filters: &spec.WebSearchFilters{
-			AllowedDomains: []string{"openai.com", "reuters.com"},
+		UserLocation: &spec.WebSearchUserLocation{
+			Country:  "CN",
+			City:     "Shanghai",
+			Timezone: "Asia/Shanghai",
 		},
-		IncludeSources: true,
-		ToolChoice:     "required", // auto 表示由模型决定是否搜索
 	},
 )
 
@@ -359,9 +409,9 @@ for _, citation := range resp.Citations {
 }
 ```
 
-`WebSearchConfig` 还支持 `ReturnTokenBudget`、`UserLocation`、`SearchContentTypes`、`ImageSettings` 和 `IncludeResults`。搜索正文中的 `url_citation` 会解析到 `resp.Citations`；请求 `IncludeSources` 后，完整来源位于 `resp.WebSearchCalls[].Action.Sources`。向最终用户展示联网结果时，应让引用清晰可见并可点击。
+Responses 模式还支持 `ReturnTokenBudget`、`Filters`、`SearchContentTypes`、`ImageSettings`、`IncludeSources`、`IncludeResults` 和 `ToolChoice`；Chat Completions 模式使用 `SearchContextSize`、`UserLocation` 等 `web_search_options` 字段。两种模式返回的 `url_citation` 都会解析到 `resp.Citations`；Responses 搜索调用还会解析到 `resp.WebSearchCalls`。
 
-该封装只允许 `/responses` 端点使用 `WithWebSearch`。第三方兼容服务是否真正透传 OpenAI 托管工具仍取决于服务商；通过 `OPENAI_TEST_API_KEY`、`OPENAI_TEST_BASE_URL` 和 `OPENAI_TEST_MODEL` 环境变量配置后，可运行 `go test -run TestOpenAIResponsesWebSearch -v` 实测。不要把真实 API Key 写入测试文件或提交到仓库。
+`WithWebSearch` 会根据端点选择搜索协议：`/responses` 使用 Responses `web_search` 工具，`/v1/chat/completions` 使用 Chat Completions `web_search_options`。第三方兼容服务是否真正执行搜索仍取决于服务商；有些网关会把查询词和来源降级追加到文本中。通过 `OPENAI_TEST_API_KEY`、`OPENAI_TEST_BASE_URL` 和 `OPENAI_TEST_MODEL` 环境变量配置后，可运行对应集成测试实测。不要把真实 API Key 写入测试文件或提交到仓库。
 
 ### Responses 连续对话
 
@@ -654,7 +704,7 @@ resp, err := c.SendResponse(
 | 推理 | `WithThinking`、`WithReasoningEffort` |
 | 流式回调 | `WithStreaming`、`WithStreamCallback`、`WithReasoningCallback`、`WithEventCallback` |
 | Responses 输入与状态 | `WithResponseInput`、`WithInstructions`、`WithPreviousResponseID` |
-| Responses 托管搜索 | `WithWebSearch` |
+| 模型托管搜索 | `WithWebSearch`（Responses、Chat Completions、ZHIPU） |
 | 扩展字段 | `WithParameters`、`WithParameter`、`WithProvider` |
 | 翻译 | `WithTranslation` |
 | 文生图请求 | `WithText2Image`、`WithText2ImageParameters` |
@@ -764,7 +814,7 @@ func main() {
 | `SendResponse` | 直接发送 Responses `input`，不修改本地聊天历史 |
 | `CreateResponse` | 使用完整 `ResponseCreateRequest` 创建响应 |
 | `ContinueResponse` | 使用 `previous_response_id` 延续响应 |
-| `SendWebSearch` | 使用托管 `web_search` 工具创建响应 |
+| `SendWebSearch` | 按配置端点使用 Responses 或 Chat Completions 联网搜索 |
 | `GenerateImage` | 使用 Responses `image_generation` 工具生成图片 |
 | `ConnectResponseWebSocket` | 建立持久 Responses WebSocket 连接 |
 
@@ -806,6 +856,7 @@ func main() {
 | `StreamRealtimeTranscription` | 从 `io.Reader` 自动分块发送音频、回调转写结果并管理完整会话生命周期 |
 | `StartRealtimeTranscription` | 建立 DashScope 双向实时语音识别会话并流式收发音频/转写事件 |
 | `SendEmbedding` | 生成单条或批量文本向量；需要 provider 实现 Embedding |
+| `SearchWeb` | 调用 provider 的独立联网搜索 API（目前支持 ZHIPU） |
 | `SendText2Image` | DashScope 使用异步文生图；OpenAI 使用 Responses 图像生成工具 |
 | `SendOCR` | 使用自定义 file part 和 OCR 任务参数识别文档 |
 | `SendOCRURL` | OCR 公网文档 URL |
@@ -816,7 +867,7 @@ func main() {
 
 | 字段 | 说明 |
 | --- | --- |
-| `Provider` | 厂商标识: `dashscope`, `openai`, `generic` |
+| `Provider` | 厂商标识: `dashscope`, `openai`, `zhipu`, `deepseek`, `openrouter`, `generic` |
 | `Model` | 模型名称: `qwen-plus`, `gpt-4o`, `qwen-image-plus` 等 |
 | `APIKey` | API 密钥 |
 | `APIURL` | (可选) 自定义接口地址，用于代理或私有部署 |
@@ -828,7 +879,7 @@ func main() {
 | `ResponseInput` | Responses 模式的默认 `input` |
 | `Instructions` | Responses 模式的默认 instructions，可为字符串或结构化输入 |
 | `PreviousResponseID` | Responses 连续对话的默认前一响应 ID |
-| `WebSearch` | 默认 Responses Web Search 配置 |
+| `WebSearch` | 模型托管联网搜索配置（Responses、Chat Completions、ZHIPU） |
 | `Translation` | 翻译任务配置 |
 | `StreamCallback` | 文本输出增量回调 |
 | `ReasoningCallback` | 推理摘要增量回调 |

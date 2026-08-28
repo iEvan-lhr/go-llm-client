@@ -9,6 +9,7 @@ import (
 	"github.com/iEvan-lhr/go-llm-client/providers/generic"
 	"github.com/iEvan-lhr/go-llm-client/providers/openai"
 	"github.com/iEvan-lhr/go-llm-client/providers/openrouter" // ✅ 新增包导入
+	"github.com/iEvan-lhr/go-llm-client/providers/zhipu"
 	"github.com/iEvan-lhr/go-llm-client/spec"
 )
 
@@ -63,6 +64,8 @@ func GetClient(cfg Config) (spec.Client, error) {
 		newClient, err = openrouter.NewClient(clientOpts...)
 	case "deepseek":
 		newClient, err = deepseek.NewClient(clientOpts...)
+	case "zhipu":
+		newClient, err = zhipu.NewClient(clientOpts...)
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", cfg.Provider)
 	}

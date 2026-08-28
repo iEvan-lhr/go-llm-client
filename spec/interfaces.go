@@ -12,6 +12,14 @@ type Client interface {
 	Model(name string) Model
 }
 
+// WebSearchClient is implemented by providers with a standalone web search
+// endpoint. It is separate from model-hosted search configured by
+// WithWebSearch.
+type WebSearchClient interface {
+	Client
+	SearchWeb(ctx context.Context, request WebSearchRequest) (*WebSearchResponse, error)
+}
+
 // ImagesClient is implemented by providers that expose OpenAI-compatible
 // image generation and image editing endpoints.
 type ImagesClient interface {
