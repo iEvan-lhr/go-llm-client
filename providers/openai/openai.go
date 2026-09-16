@@ -92,6 +92,9 @@ func (m *modelImpl) chatCompletions(ctx context.Context, messages []spec.Message
 	applyPromptCache(requestBody, config.PromptCache)
 	if config.Streaming {
 		requestBody["stream"] = true
+		if _, configured := requestBody["stream_options"]; !configured {
+			requestBody["stream_options"] = map[string]bool{"include_usage": true}
+		}
 		return m.streamChatCompletions(ctx, requestBody, config)
 	}
 
@@ -103,6 +106,11 @@ func (m *modelImpl) chatCompletions(ctx context.Context, messages []spec.Message
 	var apiResp spec.ChatCompletionResponse
 	if err := json.Unmarshal(rawBody, &apiResp); err != nil {
 		return nil, fmt.Errorf("openai provider: failed to unmarshal response: %w", err)
+	}
+	var metadata spec.Response
+	spec.ApplyResponseMetadata(&metadata, rawBody)
+	if metadata.Usage != nil {
+		apiResp.Usage = metadata.Usage
 	}
 
 	var responseMessage spec.Message
@@ -237,6 +245,11 @@ func (m *modelImpl) streamChatCompletions(ctx context.Context, requestBody map[s
 		var chunk spec.ChatCompletionResponse
 		if err := json.Unmarshal(raw, &chunk); err != nil {
 			return fmt.Errorf("openai chat: failed to decode stream chunk: %w", err)
+		}
+		var metadata spec.Response
+		spec.ApplyResponseMetadata(&metadata, raw)
+		if metadata.Usage != nil {
+			chunk.Usage = metadata.Usage
 		}
 		mergeChatCompletionMetadata(&completion, &chunk)
 
@@ -463,15 +476,23 @@ func cloneParameters(parameters map[string]any) map[string]any {
 }
 
 func applyPromptCache(requestBody map[string]any, config *spec.PromptCacheConfig) {
-	if config == nil || config.Key == "" {
+	if config == nil {
 		return
 	}
-	requestBody["prompt_cache_key"] = config.Key
-	if config.Retention != "" {
-		requestBody["prompt_cache_retention"] = config.Retention
+	if config.Capabilities != nil && !config.Capabilities.Key {
+		delete(requestBody, "prompt_cache_key")
+	} else if config.Key != "" {
+		requestBody["prompt_cache_key"] = config.Key
 	}
-	if config.Options != nil {
+	if config.Retention != "" && (config.Capabilities == nil || config.Capabilities.Retention) {
+		requestBody["prompt_cache_retention"] = config.Retention
+	} else {
+		delete(requestBody, "prompt_cache_retention")
+	}
+	if config.Options != nil && (config.Capabilities == nil || config.Capabilities.Options) {
 		requestBody["prompt_cache_options"] = config.Options
+	} else {
+		delete(requestBody, "prompt_cache_options")
 	}
 }
 

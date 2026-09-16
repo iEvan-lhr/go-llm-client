@@ -146,6 +146,15 @@ type PromptCacheConfig struct {
 	Key       string
 	Retention string
 	Options   any
+	// Capabilities overrides support for a compatible endpoint. Nil preserves
+	// the existing behavior of forwarding explicitly configured cache fields.
+	Capabilities *PromptCacheCapabilities
+}
+
+type PromptCacheCapabilities struct {
+	Key       bool
+	Retention bool
+	Options   bool
 }
 
 func WithProvider(provider map[string]any) Option {
@@ -284,6 +293,10 @@ func WithPreviousResponseID(id string) Option {
 func WithPromptCache(config PromptCacheConfig) Option {
 	return func(r *RequestConfig) {
 		copy := config
+		if config.Capabilities != nil {
+			capabilities := *config.Capabilities
+			copy.Capabilities = &capabilities
+		}
 		r.PromptCache = &copy
 	}
 }

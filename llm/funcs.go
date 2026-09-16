@@ -25,6 +25,9 @@ func ChatMessages(ctx context.Context, messages []spec.Message, cfg Config) (*sp
 	if cfg.PromptCache != nil {
 		opts = append(opts, spec.WithPromptCache(*cfg.PromptCache))
 	}
+	if cfg.ProviderOpts != nil {
+		opts = append(opts, spec.WithProvider(cfg.ProviderOpts))
+	}
 	if cfg.Thinking != nil {
 		opts = append(opts, spec.WithThinking(*cfg.Thinking))
 	}

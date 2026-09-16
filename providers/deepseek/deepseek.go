@@ -54,6 +54,7 @@ func (c *clientImpl) Model(name string) spec.Model {
 
 // Chat 执行一次对话调用，完全适配 DeepSeek V4 API 规范。
 func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...spec.Option) (*spec.Response, error) {
+	var metadata spec.Response
 	config := spec.NewRequestConfig()
 	for _, opt := range opts {
 		opt(config)
@@ -133,6 +134,7 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 				continue
 			}
 			dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			spec.ApplyResponseMetadata(&metadata, []byte(dataStr))
 			if dataStr == "[DONE]" {
 				break
 			}
@@ -180,6 +182,7 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 		}
 
 		return &spec.Response{
+			ID: metadata.ID, Model: metadata.Model, Protocol: metadata.Protocol, Status: metadata.Status, Usage: metadata.Usage,
 			Message: spec.Message{
 				Role:             spec.Role(role),
 				Content:          fullContent.String(),
@@ -193,6 +196,8 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 	if err != nil {
 		return nil, err
 	}
+
+	spec.ApplyResponseMetadata(&metadata, rawBody)
 
 	var apiResp struct {
 		Choices []struct {
@@ -219,6 +224,7 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 	}
 
 	return &spec.Response{
+		ID: metadata.ID, Model: metadata.Model, Protocol: metadata.Protocol, Status: metadata.Status, Usage: metadata.Usage,
 		Message:     responseMessage,
 		RawResponse: rawBody,
 	}, nil

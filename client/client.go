@@ -146,9 +146,6 @@ func (c *Client) SendResponse(ctx context.Context, input any, opts ...spec.Optio
 	if request.Instructions == nil && c.config.SystemPrompt != "" {
 		request.Instructions = c.config.SystemPrompt
 	}
-	if c.config.PromptCache != nil {
-		opts = append([]spec.Option{spec.WithPromptCache(*c.config.PromptCache)}, opts...)
-	}
 	return c.CreateResponse(ctx, request, opts...)
 }
 
@@ -390,6 +387,12 @@ func (c *Client) SendPartsNoHistory(ctx context.Context, parts ...spec.ContentPa
 // does not include previous turns.
 func (c *Client) SendIndependent(ctx context.Context, userPrompt string) (*spec.Response, error) {
 	return c.invoke(ctx, c.independentMessages(spec.NewUserMessage(userPrompt)), nil)
+}
+
+// SendIndependentMessages sends the exact supplied messages without reading
+// history or prepending SystemPrompt. Options apply to this request only.
+func (c *Client) SendIndependentMessages(ctx context.Context, messages []spec.Message, opts ...spec.Option) (*spec.Response, error) {
+	return c.invoke(ctx, messages, nil, opts...)
 }
 
 // SendIndependentStream has the same input semantics as SendIndependent.

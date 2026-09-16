@@ -261,6 +261,7 @@ func (m *modelImpl) handleText2Image(ctx context.Context, messages []spec.Messag
 
 // handleChat 处理标准聊天请求（流式/非流式）
 func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, config *spec.RequestConfig) (*spec.Response, error) {
+	var metadata spec.Response
 	requestBody := make(map[string]any)
 	if config.Parameters != nil {
 		for k, v := range config.Parameters {
@@ -304,6 +305,7 @@ func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, con
 			}
 
 			dataStr := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			spec.ApplyResponseMetadata(&metadata, []byte(dataStr))
 			if dataStr == "[DONE]" {
 				break
 			}
@@ -377,6 +379,7 @@ func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, con
 		}
 
 		return &spec.Response{
+			ID: metadata.ID, Model: metadata.Model, Protocol: metadata.Protocol, Status: metadata.Status, Usage: metadata.Usage,
 			Message: spec.Message{
 				Role:    spec.Role(role),
 				Content: fullContent.String(),
@@ -389,6 +392,8 @@ func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, con
 	if err != nil {
 		return nil, err
 	}
+
+	spec.ApplyResponseMetadata(&metadata, rawBody)
 
 	var apiResp struct {
 		Choices []struct {
@@ -405,6 +410,7 @@ func (m *modelImpl) handleChat(ctx context.Context, messages []spec.Message, con
 	}
 
 	return &spec.Response{
+		ID: metadata.ID, Model: metadata.Model, Protocol: metadata.Protocol, Status: metadata.Status, Usage: metadata.Usage,
 		Message:     responseMessage,
 		RawResponse: rawBody,
 	}, nil

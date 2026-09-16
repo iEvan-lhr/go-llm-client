@@ -41,6 +41,10 @@ func (cfg Config) Snapshot() (Config, error) {
 	}
 	if cfg.PromptCache != nil {
 		value := *cfg.PromptCache
+		if cfg.PromptCache.Capabilities != nil {
+			capabilities := *cfg.PromptCache.Capabilities
+			value.Capabilities = &capabilities
+		}
 		if cfg.PromptCache.Options != nil {
 			value.Options, err = spec.SnapshotJSON(cfg.PromptCache.Options)
 			if err != nil {

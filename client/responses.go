@@ -36,6 +36,22 @@ func (c *Client) CreateResponse(ctx context.Context, request spec.ResponseCreate
 	if request.PreviousResponseID == "" {
 		request.PreviousResponseID = c.config.PreviousResponseID
 	}
+	cache := spec.PromptCacheConfig{}
+	if c.config.PromptCache != nil {
+		cache = *c.config.PromptCache
+	}
+	if request.PromptCacheKey != "" {
+		cache.Key = request.PromptCacheKey
+	}
+	if request.PromptCacheRetention != "" {
+		cache.Retention = request.PromptCacheRetention
+	}
+	if request.PromptCacheOptions != nil {
+		cache.Options = request.PromptCacheOptions
+	}
+	if cache.Key != "" || cache.Retention != "" || cache.Options != nil || cache.Capabilities != nil {
+		opts = append([]spec.Option{spec.WithPromptCache(cache)}, opts...)
+	}
 	return api.CreateResponse(ctx, request, c.responseOptions(opts...)...)
 }
 

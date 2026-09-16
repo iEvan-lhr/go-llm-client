@@ -57,6 +57,7 @@ func (c *clientImpl) Model(name string) spec.Model {
 
 // Chat 实现了 llm.Model 接口的方法
 func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...spec.Option) (*spec.Response, error) {
+	var metadata spec.Response
 	config := spec.NewRequestConfig()
 	for _, opt := range opts {
 		opt(config)
@@ -111,6 +112,8 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 	}
 
 	// 解析响应
+	spec.ApplyResponseMetadata(&metadata, rawBody)
+
 	var apiResp struct {
 		Choices []struct {
 			Message spec.Message `json:"message"`
@@ -130,6 +133,7 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 	responseMessage.Content = thinkTagRegex.ReplaceAllString(responseMessage.Content, "")
 
 	return &spec.Response{
+		ID: metadata.ID, Model: metadata.Model, Protocol: metadata.Protocol, Status: metadata.Status, Usage: metadata.Usage,
 		Message:     responseMessage,
 		RawResponse: rawBody,
 	}, nil

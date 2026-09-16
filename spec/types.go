@@ -36,31 +36,13 @@ type Response struct {
 // CachedTokens returns the number of input tokens served from the prompt
 // cache, when the provider reports cache usage.
 func (r *Response) CachedTokens() int {
-	if r == nil || r.Usage == nil {
-		return 0
-	}
-	if r.Usage.InputTokensDetails != nil {
-		return r.Usage.InputTokensDetails.CachedTokens
-	}
-	if r.Usage.PromptTokensDetails != nil {
-		return r.Usage.PromptTokensDetails.CachedTokens
-	}
-	return 0
+	return r.CacheUsage().ReadTokens
 }
 
 // CacheWriteTokens returns tokens written to a provider prompt cache, when
 // reported by the provider.
 func (r *Response) CacheWriteTokens() int {
-	if r == nil || r.Usage == nil {
-		return 0
-	}
-	if r.Usage.InputTokensDetails != nil {
-		return r.Usage.InputTokensDetails.CacheWriteTokens
-	}
-	if r.Usage.PromptTokensDetails != nil {
-		return r.Usage.PromptTokensDetails.CacheWriteTokens
-	}
-	return 0
+	return r.CacheUsage().WriteTokens
 }
 
 // InputTokens returns the provider-reported input/prompt token count.

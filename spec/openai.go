@@ -30,12 +30,14 @@ type ToolCall struct {
 
 // TokenDetails contains optional token categories returned by OpenAI APIs.
 type TokenDetails struct {
-	CachedTokens             int `json:"cached_tokens,omitempty"`
-	CacheWriteTokens         int `json:"cache_write_tokens,omitempty"`
-	AudioTokens              int `json:"audio_tokens,omitempty"`
-	ReasoningTokens          int `json:"reasoning_tokens,omitempty"`
-	AcceptedPredictionTokens int `json:"accepted_prediction_tokens,omitempty"`
-	RejectedPredictionTokens int `json:"rejected_prediction_tokens,omitempty"`
+	CachedTokensReported     bool `json:"cached_tokens_reported,omitempty"`
+	CacheWriteTokensReported bool `json:"cache_write_tokens_reported,omitempty"`
+	CachedTokens             int  `json:"cached_tokens,omitempty"`
+	CacheWriteTokens         int  `json:"cache_write_tokens,omitempty"`
+	AudioTokens              int  `json:"audio_tokens,omitempty"`
+	ReasoningTokens          int  `json:"reasoning_tokens,omitempty"`
+	AcceptedPredictionTokens int  `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int  `json:"rejected_prediction_tokens,omitempty"`
 }
 
 // Usage contains the union of Chat Completions and Responses token accounting.
