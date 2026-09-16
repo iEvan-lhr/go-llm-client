@@ -89,6 +89,7 @@ func (m *modelImpl) chatCompletions(ctx context.Context, messages []spec.Message
 			return nil, err
 		}
 	}
+	applyPromptCache(requestBody, config.PromptCache)
 	if config.Streaming {
 		requestBody["stream"] = true
 		return m.streamChatCompletions(ctx, requestBody, config)
@@ -175,6 +176,7 @@ func (m *modelImpl) responses(ctx context.Context, messages []spec.Message, conf
 			return nil, err
 		}
 	}
+	applyPromptCache(requestBody, config.PromptCache)
 
 	if config.Streaming {
 		requestBody["stream"] = true
@@ -458,6 +460,19 @@ func cloneParameters(parameters map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func applyPromptCache(requestBody map[string]any, config *spec.PromptCacheConfig) {
+	if config == nil || config.Key == "" {
+		return
+	}
+	requestBody["prompt_cache_key"] = config.Key
+	if config.Retention != "" {
+		requestBody["prompt_cache_retention"] = config.Retention
+	}
+	if config.Options != nil {
+		requestBody["prompt_cache_options"] = config.Options
+	}
 }
 
 func applyWebSearch(requestBody map[string]any, config spec.WebSearchConfig) error {

@@ -12,6 +12,8 @@ import (
 )
 
 // Client 是一个有状态的、预配置好的LLM客户端。
+// Methods that use history must be serialized by the caller. Configuration is
+// snapshotted by New; callbacks must provide their own synchronization.
 type Client struct {
 	config  llm.Config
 	history []spec.Message
@@ -20,6 +22,10 @@ type Client struct {
 
 // New 创建一个新的、有状态的LLM客户端实例。
 func New(cfg llm.Config) (*Client, error) {
+	cfg, err := cfg.Snapshot()
+	if err != nil {
+		return nil, err
+	}
 	// 使用 llm 包的工厂方法获取实例
 	providerClient, err := llm.GetClient(cfg)
 	if err != nil {
@@ -45,6 +51,13 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	if tempConfig != nil {
 		cfg = *tempConfig
 	}
+	// Each request owns its configuration and messages, so provider adaptation
+	// cannot mutate the next request's fixed prefix or tool definitions.
+	cfg, err := cfg.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	messages = spec.CloneMessages(messages)
 
 	var opts []spec.Option
 	// 【新增】处理 WebExtractor：将工具组装到 Parameters 中，同时执行深拷贝避免污染全局配置
@@ -75,6 +88,9 @@ func (c *Client) invoke(ctx context.Context, messages []spec.Message, tempConfig
 	}
 	if cfg.Parameters != nil {
 		opts = append(opts, spec.WithParameters(cfg.Parameters))
+	}
+	if cfg.PromptCache != nil {
+		opts = append(opts, spec.WithPromptCache(*cfg.PromptCache))
 	}
 	if cfg.ProviderOpts != nil {
 		opts = append(opts, spec.WithProvider(cfg.ProviderOpts))
@@ -129,6 +145,9 @@ func (c *Client) SendResponse(ctx context.Context, input any, opts ...spec.Optio
 	}
 	if request.Instructions == nil && c.config.SystemPrompt != "" {
 		request.Instructions = c.config.SystemPrompt
+	}
+	if c.config.PromptCache != nil {
+		opts = append([]spec.Option{spec.WithPromptCache(*c.config.PromptCache)}, opts...)
 	}
 	return c.CreateResponse(ctx, request, opts...)
 }
@@ -211,13 +230,13 @@ func (c *Client) Send(ctx context.Context, userPrompt string) (*spec.Response, e
 		return nil, err
 	}
 
-	c.history = append(c.history, resp.Message)
+	c.history = append(c.history, resp.Message.Clone())
 	return resp, nil
 }
 
 // SendParts 发送多模态消息，并写入历史
 func (c *Client) SendParts(ctx context.Context, parts ...spec.ContentPart) (*spec.Response, error) {
-	c.history = append(c.history, spec.NewUserPartsMessage(parts...))
+	c.history = append(c.history, spec.NewUserPartsMessage(parts...).Clone())
 
 	resp, err := c.invoke(ctx, c.history, nil)
 	if err != nil {
@@ -225,7 +244,7 @@ func (c *Client) SendParts(ctx context.Context, parts ...spec.ContentPart) (*spe
 		return nil, err
 	}
 
-	c.history = append(c.history, resp.Message)
+	c.history = append(c.history, resp.Message.Clone())
 	return resp, nil
 }
 
@@ -259,7 +278,7 @@ func (c *Client) SendText2Image(ctx context.Context, userPrompt string, opts ...
 			c.history = c.history[:len(c.history)-1]
 			return nil, err
 		}
-		c.history = append(c.history, resp.Message)
+		c.history = append(c.history, resp.Message.Clone())
 		return resp, nil
 	}
 
@@ -290,7 +309,7 @@ func (c *Client) SendText2Image(ctx context.Context, userPrompt string, opts ...
 		return nil, err
 	}
 
-	c.history = append(c.history, resp.Message)
+	c.history = append(c.history, resp.Message.Clone())
 	return resp, nil
 }
 
@@ -328,12 +347,12 @@ func (c *Client) SendStream(ctx context.Context, userPrompt string, callback spe
 		return nil, err
 	}
 
-	c.history = append(c.history, resp.Message)
+	c.history = append(c.history, resp.Message.Clone())
 	return resp, nil
 }
 
 func (c *Client) SendStreamParts(ctx context.Context, parts []spec.ContentPart, callback spec.StreamCallback) (*spec.Response, error) {
-	c.history = append(c.history, spec.NewUserPartsMessage(parts...))
+	c.history = append(c.history, spec.NewUserPartsMessage(parts...).Clone())
 
 	tempConfig := c.config
 	tempConfig.StreamCallback = callback
@@ -344,7 +363,7 @@ func (c *Client) SendStreamParts(ctx context.Context, parts []spec.ContentPart, 
 		return nil, err
 	}
 
-	c.history = append(c.history, resp.Message)
+	c.history = append(c.history, resp.Message.Clone())
 	return resp, nil
 }
 
@@ -363,12 +382,29 @@ func (c *Client) SendImageBase64(ctx context.Context, mimeType, base64Data, ques
 }
 
 func (c *Client) SendPartsNoHistory(ctx context.Context, parts ...spec.ContentPart) (*spec.Response, error) {
+	return c.invoke(ctx, c.independentMessages(spec.NewUserPartsMessage(parts...)), nil)
+}
+
+// SendIndependent sends only the configured system prompt and current input.
+// It neither reads nor updates conversation history. Unlike SendNoHistory, it
+// does not include previous turns.
+func (c *Client) SendIndependent(ctx context.Context, userPrompt string) (*spec.Response, error) {
+	return c.invoke(ctx, c.independentMessages(spec.NewUserMessage(userPrompt)), nil)
+}
+
+// SendIndependentStream has the same input semantics as SendIndependent.
+func (c *Client) SendIndependentStream(ctx context.Context, userPrompt string, callback spec.StreamCallback) (*spec.Response, error) {
+	cfg := c.config
+	cfg.StreamCallback = callback
+	return c.invoke(ctx, c.independentMessages(spec.NewUserMessage(userPrompt)), &cfg)
+}
+
+func (c *Client) independentMessages(message spec.Message) []spec.Message {
 	var messages []spec.Message
 	if c.config.SystemPrompt != "" {
 		messages = append(messages, spec.NewSystemMessage(c.config.SystemPrompt))
 	}
-	messages = append(messages, spec.NewUserPartsMessage(parts...))
-	return c.invoke(ctx, messages, nil)
+	return append(messages, message.Clone())
 }
 
 // SendOCR 发送 OCR 请求，传入文件 Part（支持 URL 或本地文件编码）并指定任务参数。
@@ -417,24 +453,7 @@ func (c *Client) SendOCRBytes(ctx context.Context, data []byte, mimeType string,
 // 2. 依然会使用初始化时的 System Prompt。
 // 3. 本次对话完全独立，不会污染 Client 的 history。
 func (c *Client) SendStreamNoHistory(ctx context.Context, userPrompt string, callback spec.StreamCallback) (*spec.Response, error) {
-	// 1. 重新构建消息列表，只包含 System Prompt (如果有) 和当前 User Prompt
-	var messages []spec.Message
-
-	// 如果配置了系统提示词，需要加上，保证人设一致
-	if c.config.SystemPrompt != "" {
-		messages = append(messages, spec.NewSystemMessage(c.config.SystemPrompt))
-	}
-
-	// 添加当前用户消息
-	messages = append(messages, spec.NewUserMessage(userPrompt))
-
-	// 2. 创建临时配置以携带回调函数
-	tempConfig := c.config
-	tempConfig.StreamCallback = callback
-
-	// 3. 调用 invoke
-	// invoke 内部只会使用传入的 messages，不会读取 c.history
-	return c.invoke(ctx, messages, &tempConfig)
+	return c.SendIndependentStream(ctx, userPrompt, callback)
 }
 
 // SendNoHistory 发送消息但不记录到历史（单次问答），但会携带之前的历史上下文
@@ -468,7 +487,7 @@ func (c *Client) ResetHistory() {
 	}
 }
 
-// GetHistory 返回当前对话的完整历史记录。
+// GetHistory 返回当前对话的完整历史记录的深拷贝。
 func (c *Client) GetHistory() []spec.Message {
-	return c.history
+	return spec.CloneMessages(c.history)
 }

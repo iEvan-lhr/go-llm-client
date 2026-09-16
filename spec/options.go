@@ -123,6 +123,10 @@ type RequestConfig struct {
 
 	Parameters map[string]any
 
+	// PromptCache controls provider-supported prompt prefix caching. Keep the
+	// key stable for the same system prompt, tools, and model configuration.
+	PromptCache *PromptCacheConfig
+
 	// Responses API request fields that cannot be represented as chat messages.
 	ResponseInput      any
 	Instructions       any
@@ -133,6 +137,15 @@ type RequestConfig struct {
 	text2Image bool
 	imageEdit  bool
 	Provider   map[string]any
+}
+
+// PromptCacheConfig describes a provider prompt-cache identity. Providers
+// that do not expose an explicit cache key continue to use their automatic
+// prefix-cache behavior.
+type PromptCacheConfig struct {
+	Key       string
+	Retention string
+	Options   any
 }
 
 func WithProvider(provider map[string]any) Option {
@@ -264,6 +277,20 @@ func WithPreviousResponseID(id string) Option {
 	return func(r *RequestConfig) {
 		r.PreviousResponseID = id
 	}
+}
+
+// WithPromptCache enables a stable prompt-cache identity for providers that
+// support explicit cache keys, such as the OpenAI Responses API.
+func WithPromptCache(config PromptCacheConfig) Option {
+	return func(r *RequestConfig) {
+		copy := config
+		r.PromptCache = &copy
+	}
+}
+
+// WithPromptCacheKey is the short form for the common stable-key case.
+func WithPromptCacheKey(key string) Option {
+	return WithPromptCache(PromptCacheConfig{Key: key})
 }
 
 // WithWebSearch enables provider-supported model-hosted search for Responses

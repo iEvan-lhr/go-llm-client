@@ -34,6 +34,8 @@ type Config struct {
 	// ReasoningEffortLow, ReasoningEffortMedium, or ReasoningEffortHigh.
 	ReasoningEffort ReasoningEffort
 	Parameters      map[string]any
+	// PromptCache configures a stable prompt prefix cache identity.
+	PromptCache *spec.PromptCacheConfig
 	// Responses API fields for stateful or non-message calls.
 	ResponseInput      any
 	Instructions       any

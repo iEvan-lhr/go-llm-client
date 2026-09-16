@@ -33,6 +33,57 @@ type Response struct {
 	OCRResult *OCRResult
 }
 
+// CachedTokens returns the number of input tokens served from the prompt
+// cache, when the provider reports cache usage.
+func (r *Response) CachedTokens() int {
+	if r == nil || r.Usage == nil {
+		return 0
+	}
+	if r.Usage.InputTokensDetails != nil {
+		return r.Usage.InputTokensDetails.CachedTokens
+	}
+	if r.Usage.PromptTokensDetails != nil {
+		return r.Usage.PromptTokensDetails.CachedTokens
+	}
+	return 0
+}
+
+// CacheWriteTokens returns tokens written to a provider prompt cache, when
+// reported by the provider.
+func (r *Response) CacheWriteTokens() int {
+	if r == nil || r.Usage == nil {
+		return 0
+	}
+	if r.Usage.InputTokensDetails != nil {
+		return r.Usage.InputTokensDetails.CacheWriteTokens
+	}
+	if r.Usage.PromptTokensDetails != nil {
+		return r.Usage.PromptTokensDetails.CacheWriteTokens
+	}
+	return 0
+}
+
+// InputTokens returns the provider-reported input/prompt token count.
+func (r *Response) InputTokens() int {
+	if r == nil || r.Usage == nil {
+		return 0
+	}
+	if r.Usage.InputTokens > 0 {
+		return r.Usage.InputTokens
+	}
+	return r.Usage.PromptTokens
+}
+
+// CacheHitRate returns cached input tokens divided by input tokens. It is
+// zero when the provider did not return usage data.
+func (r *Response) CacheHitRate() float64 {
+	input := r.InputTokens()
+	if input == 0 {
+		return 0
+	}
+	return float64(r.CachedTokens()) / float64(input)
+}
+
 type OCRStyle struct {
 	Bold       bool    `json:"bold"`
 	CharScale  float64 `json:"charScale"`

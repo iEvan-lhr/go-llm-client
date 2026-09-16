@@ -73,7 +73,7 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 		//foundSystem := false
 		for i, msg := range processedMessages {
 			if msg.Role == spec.RoleSystem {
-				messages[i].Content += "\n/no_think"
+				processedMessages[i].Content += "\n/no_think"
 				//foundSystem = true
 				break
 			}
@@ -86,7 +86,7 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 
 	// 强制设置核心参数
 	requestBody["model"] = m.name // 这里的name将是 "/mnt/Qwen3-30B-A3B/"
-	requestBody["messages"] = messages
+	requestBody["messages"] = processedMessages
 
 	if config.Temperature != nil {
 		requestBody["temperature"] = *config.Temperature

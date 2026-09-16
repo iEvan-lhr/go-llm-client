@@ -22,7 +22,83 @@ go get github.com/iEvan-lhr/go-llm-client
 
 ## 🚀 快速开始 (Recommended)
 
+### 提示词缓存
+
+需要稳定命中提示词缓存时，在客户端配置中设置固定的缓存键。缓存键应对应同一套模型、系统提示词和工具定义；每次变化的用户问题继续作为最后一条 user 消息传入。
+
+```go
+c, err := client.New(llm.Config{
+    Provider: "openai",
+    Model: "gpt-4.1-mini",
+    APIKey: os.Getenv("OPENAI_API_KEY"),
+    PromptCache: &spec.PromptCacheConfig{
+        Key: "support-bot-v3",
+        Retention: "24h", // 仅发送给支持该字段的 provider
+    },
+    SystemPrompt: stableSystemPrompt,
+})
+
+resp, err := c.Send(ctx, userQuestion)
+fmt.Printf("cached=%d input=%d hit-rate=%.1f%%\n",
+    resp.CachedTokens(), resp.InputTokens(), resp.CacheHitRate()*100)
+```
+
+`PromptCache` 会自动应用于客户端的普通、流式和 Responses 调用。OpenAI Responses 会发送 `prompt_cache_key`；不支持显式 key 的 provider 会继续使用其自动前缀缓存策略。为了保持前缀稳定，不要把时间戳、随机 ID、用户数据或动态检索结果拼进 `SystemPrompt`。
+
 推荐使用 `client` 包创建一个有状态的客户端。它会自动为您维护对话历史，同时也支持单次临时问答。
+
+### 公共层：固定前缀与配置快照
+
+`spec.NewPromptPrefix` 将固定规则、示例、公共资料和工具定义保存为不可变快照。构造顺序为：系统提示词 → 示例 → 公共资料 → 历史 → 本轮输入。消息角色、文本和数组顺序均原样保留；工具采用目标接口要求的 schema，不自动排序或转换厂商协议。
+
+```go
+prefix, err := spec.NewPromptPrefix(spec.PromptPrefixConfig{
+    Version:      "support-v1",
+    SystemPrompt: "根据提供的资料回答问题；资料不足时说明无法确定。",
+    Examples: []spec.Message{
+        spec.NewUserMessage("如何申请退款？"),
+        spec.NewAssistantMessage("请提供订单号，我会根据退款规则协助处理。"),
+    },
+    Context: []spec.Message{
+        spec.NewUserMessage("公共资料：退款申请需提供订单号和购买日期。"),
+    },
+    // Tools: 固定工具列表，使用所选 provider / endpoint 的格式。
+})
+if err != nil {
+    return err
+}
+parameters, err := prefix.Parameters(nil)
+if err != nil {
+    return err
+}
+cfg := llm.Config{
+    Provider:   "openai",
+    Model:      "your-model",
+    APIKey:     os.Getenv("OPENAI_API_KEY"),
+    Parameters: parameters,
+}
+var history []spec.Message // 只保存对话，不重复保存固定前缀。
+question := spec.NewUserMessage("申请退款需要哪些信息？")
+messages := prefix.BuildMessages(history, question)
+resp, err := llm.ChatMessages(ctx, messages, cfg)
+if err != nil {
+    return err
+}
+history = append(history, question, resp.Message.Clone())
+fmt.Printf("template=%s fingerprint=%s\n", prefix.Version(), prefix.Fingerprint())
+```
+
+`BuildMessages` 可用于 `llm.ChatMessages` 或底层 `Model.Chat`；普通与流式调用共用相同的消息构造方式。对 Responses 输入，可以显式将构造结果传入 `SendResponse`，并通过配置或请求传递 `prefix.Parameters` / `prefix.Tools`。使用服务端会话续接时，仅在初始输入添加前缀，后续发送增量输入，避免重复累加。
+
+本轮检索结果、时间和用户问题作为 `BuildMessages` 的当前消息追加，不放进模板。`Parameters(base)` 返回独立副本：模板未指定 `Tools` 时保留 base 中的工具；指定工具时覆盖 base 的工具，非 nil 空列表表示显式空工具列表。
+
+`Fingerprint()` 是包含模板版本、固定消息和工具的本地 SHA-256 指纹，不包含模型、端点、额外参数或本轮问题。它用于定位模板变化，不会自动发送为厂商缓存键，也不代表服务端 token 前缀一定相同或一定命中。改变工具顺序会改变指纹；JSON 对象键顺序不影响指纹。
+
+`client.New` 会保存 `llm.Config` 的配置快照；后续修改原始工具 schema、参数 map 或指针不会改变该客户端。每次消息调用再创建独立请求副本。`llm.ChatMessages` 同样会复制本次配置和消息；如需多次调用共享冻结配置，可先调用 `cfg.Snapshot()`。参数中的 JSON 对象/数组规范化为 map/slice，数字使用 `json.Number` 保留精度，自定义 JSON marshal 方法在创建快照时执行，不可序列化的配置会提前报错。构造快照期间不要并发修改原始对象。
+
+`GetHistory()` 返回深拷贝，模型响应和多模态输入在写入内部历史时也会复制。包含历史的 Client 调用仍需由调用方串行执行；回调函数中的共享状态由调用方同步。
+
+独立请求使用 `SendIndependent` / `SendIndependentStream`：两者都只发送系统提示词与本轮问题，不读写历史。旧接口行为保留：`SendNoHistory` 携带已有历史但不保存本轮消息，`SendStreamNoHistory` 等同于 `SendIndependentStream`。
 
 ### 1. 基础流式对话 (无历史记录模式)
 
@@ -39,6 +115,7 @@ import (
     // 引入两个核心包
     "github.com/iEvan-lhr/go-llm-client/client" // 核心客户端，管理会话
     "github.com/iEvan-lhr/go-llm-client/llm"    // 包含配置定义和通用类型
+    "github.com/iEvan-lhr/go-llm-client/spec"   // 缓存配置和响应类型
 )
 
 func main() {
@@ -938,3 +1015,7 @@ fmt.Println(resp)
 ## License
 
 MIT
+
+### Zhipu MCP
+
+`providers/zhipu.NewMCPTools` exposes `webSearchPrime` and `webReader` through the reusable `mcp.Client`. MCP is enabled only when the final API URL (trailing slash normalized) is exactly `https://open.bigmodel.cn/api/anthropic`, `https://open.bigmodel.cn/api/coding/paas/v4`, or `https://open.bigmodel.cn/api/v1`, and an API key is supplied. Calls use Bearer authentication, context timeouts, bounded retries, and reject local/private reader URLs. Use `NewMCPTools(apiURL, os.Getenv("ZHIPU_API_KEY"), timeout, retries)`; an unsupported URL returns `当前调用地址不支持智谱 MCP`.

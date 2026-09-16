@@ -8,6 +8,11 @@ import (
 
 // ChatMessages 是最核心的无状态调用函数，适用于多轮对话场景。
 func ChatMessages(ctx context.Context, messages []spec.Message, cfg Config) (*spec.Response, error) {
+	cfg, err := cfg.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	messages = spec.CloneMessages(messages)
 	client, err := GetClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get client for provider '%s': %w", cfg.Provider, err)
@@ -16,6 +21,9 @@ func ChatMessages(ctx context.Context, messages []spec.Message, cfg Config) (*sp
 	var opts []spec.Option
 	if cfg.Parameters != nil {
 		opts = append(opts, spec.WithParameters(cfg.Parameters))
+	}
+	if cfg.PromptCache != nil {
+		opts = append(opts, spec.WithPromptCache(*cfg.PromptCache))
 	}
 	if cfg.Thinking != nil {
 		opts = append(opts, spec.WithThinking(*cfg.Thinking))

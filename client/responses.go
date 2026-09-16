@@ -10,6 +10,15 @@ import (
 // CreateResponse exposes the complete typed Responses request while applying
 // the callbacks and defaults configured on Client.
 func (c *Client) CreateResponse(ctx context.Context, request spec.ResponseCreateRequest, opts ...spec.Option) (*spec.Response, error) {
+	// Default tools and instructions belong to this request, never to the
+	// client's reusable configuration snapshot.
+	cfg, err := c.config.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	requestClient := *c
+	requestClient.config = cfg
+	c = &requestClient
 	api, err := c.responsesAPI()
 	if err != nil {
 		return nil, err
