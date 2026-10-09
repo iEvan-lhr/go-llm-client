@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 )
 
-// Protocol identifies the OpenAI wire protocol used for a response or event.
+// Protocol identifies the wire protocol used for a response or event.
 type Protocol string
 
 const (
-	ProtocolChatCompletions Protocol = "chat_completions"
-	ProtocolResponses       Protocol = "responses"
+	ProtocolChatCompletions   Protocol = "chat_completions"
+	ProtocolResponses         Protocol = "responses"
+	ProtocolAnthropicMessages Protocol = "anthropic_messages"
 )
 
 // FunctionCall is the function name and JSON-encoded arguments of a tool call.

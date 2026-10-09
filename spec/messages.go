@@ -33,6 +33,9 @@ type Message struct {
 	Annotations []json.RawMessage `json:"annotations,omitempty"`
 	// ReasoningContent stores provider-specific reasoning text.
 	ReasoningContent string `json:"reasoning_content,omitempty"`
+	// AnthropicContent preserves native blocks, including signed thinking, for
+	// replay in an Anthropic Messages conversation. Clear it to edit the reply.
+	AnthropicContent json.RawMessage `json:"-"`
 }
 
 // NewSystemMessage 创建一条系统消息

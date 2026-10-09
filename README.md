@@ -4,7 +4,7 @@
 
 ## ✨ 核心特性
 
-* **统一接口**：一套代码适配 Dashscope (阿里云百炼)、OpenAI、ZHIPU AI（智谱）及各类私有化部署模型（Generic）。
+* **统一接口**：一套代码适配 Dashscope (阿里云百炼)、OpenAI、OpenCode Go、ZHIPU AI（智谱）及各类私有化部署模型（Generic）。
 * **客户端模式 (Client)**：内置上下文记忆管理，像聊天一样简单地调用。
 * **多模态输入与图像生成 (New 🚀)**：支持图片 URL/Base64/本地文件、音频、文档和文件 ID 输入，并支持 DashScope 异步文生图、OpenAI Responses `image_generation` 以及独立的 Images 生成/编辑 API。
 * **DashScope 实时语音识别**：统一支持 Qwen-Audio 3.0、Fun-ASR、Qwen3-ASR-Realtime 与 Paraformer 的双向 WebSocket 音频流和实时转写事件。
@@ -122,7 +122,7 @@ func main() {
     // 1. 初始化客户端
     // 注意：使用 client.New 而不是 llm.New
     c, err := client.New(llm.Config{
-       Provider: "dashscope", // 支持 "dashscope", "openai", "zhipu", "generic"
+       Provider: "dashscope", // 也支持 openai、opencode-go、zhipu、deepseek、openrouter、generic
        Model:    "qwen-plus",
        APIKey:   os.Getenv("DASHSCOPE_API_KEY"),
        // 如果是 Dashscope，通常不需要手动设置 APIURL，库内有默认值。
@@ -174,6 +174,57 @@ func main() {
 }
 
 ```
+
+## OpenCode Go
+
+将 `Provider` 设置为 `opencode-go`，使用 [OpenCode Console](https://opencode.ai/console) 中的 Go 订阅 API key。默认地址为 `https://opencode.ai/zen/go/v1`，无需手动填写 `APIURL`：
+
+```go
+c, err := client.New(llm.Config{
+    Provider:     "opencode-go",
+    Model:        "glm-5.3", // 也接受 opencode-go/glm-5.3
+    APIKey:       os.Getenv("OPENCODE_GO_API_KEY"),
+    SystemPrompt: "你是一个 Go 编程助手。",
+    UserAgent:    "my-coding-agent/1.0", // 推荐填写实际应用名称和版本
+    // SessionID: "conversation-123", // 可选；省略时每个 client 自动生成
+})
+if err != nil {
+    panic(err)
+}
+
+resp, err := c.Send(context.Background(), "帮我检查这段 Go 代码的并发问题。")
+if err != nil {
+    panic(err)
+}
+fmt.Println(resp.Message.Content)
+
+// 同一个 client 的后续请求复用会话 ID，并携带对话历史。
+_, err = c.SendStream(context.Background(), "给出修复建议。", func(ctx context.Context, chunk string) error {
+    fmt.Print(chunk)
+    return nil
+})
+if err != nil {
+    panic(err)
+}
+```
+
+provider 按模型自动选择官方协议，`Send`、`SendStream`、独立调用和 `llm.Chat` 都通过同一个适配入口：
+
+| 模型示例 | 默认端点 |
+| --- | --- |
+| `glm-5.3`、`kimi-k3`、`deepseek-v4.1-flash`、`mimo-v2.6-flash`、`longcat-2.0` | `/chat/completions` |
+| `gpt-6-luna`、`grok-4.7`、`muse-spark-1.3-contributor` | `/responses` |
+| `claude-haiku-5-5`、`minimax-m3`、`minimax-m2.7`、`qwen3.8-max` | `/messages` |
+
+可用模型会变化，请以 [Go 官方文档](https://opencode.ai/v2/docs/console/go/#endpoints) 和 `https://opencode.ai/zen/go/v1/models` 为准。未知模型默认使用 Chat Completions。`APIURL` 可设置为代理的 `/v1` 根地址以保留自动路由，也可填写完整 `/chat/completions`、`/responses` 或 `/messages` 地址来固定协议。
+
+根据官方要求，每个请求都会携带 `User-Agent`（默认 `go-llm-client/1.0`）和 `x-opencode-session`。每个 `client.New` 自动分配独立会话 ID；如果使用无状态 `llm.Chat` / `llm.ChatMessages` 完成同一段对话，请在每次调用的 `llm.Config` 中填写相同的 `SessionID`。重建 client 时也可以用这个字段继续同一个会话标识；历史消息仍需由应用保存并传入。
+
+三种协议都支持正文、思考内容、工具调用、结束原因、token 用量和流式回调。Messages 响应在 `Message.AnthropicContent` 中保留原生块和思考签名，多轮对话会自动回传；若要修改回复再发送，请清空该字段。缓存读取和写入计数可通过 `CachedTokens()`、`CacheWriteTokens()` 和 `CacheUsage()` 获取。
+
+GLM、Kimi 和 DeepSeek 的 Chat Completions 模型会将 `Thinking` 转换为 `thinking.type`；Messages 模型会转换为原生 `thinking` 配置，启用时默认预算为 1024 tokens、默认 `max_tokens` 为 4096，可通过 `Parameters` 覆盖预算。原生工具可直接通过 `Parameters["tools"]` 传入，标准 OpenAI function tools 和 tool results 会自动转换。图片和文档输入是否可用取决于模型。
+
+此 provider 通过统一 Chat 入口支持 Responses 模型；独立的 Responses 生命周期方法（如 `CreateResponse`、`RetrieveResponse`）仍由 `openai` provider 提供。Messages 模型的联网搜索需通过 `Parameters` 配置原生 search tools。
 
 ## ZHIPU AI（智谱）
 
@@ -944,15 +995,17 @@ func main() {
 
 | 字段 | 说明 |
 | --- | --- |
-| `Provider` | 厂商标识: `dashscope`, `openai`, `zhipu`, `deepseek`, `openrouter`, `generic` |
+| `Provider` | 厂商标识: `dashscope`, `openai`, `opencode-go`, `zhipu`, `deepseek`, `openrouter`, `generic` |
 | `Model` | 模型名称: `qwen-plus`, `gpt-4o`, `qwen-image-plus` 等 |
 | `APIKey` | API 密钥 |
 | `APIURL` | (可选) 自定义接口地址，用于代理或私有部署 |
+| `SessionID` | (可选) OpenCode Go 会话标识；有状态 client 默认自动生成，无状态多轮调用需显式复用 |
+| `UserAgent` | (可选) OpenCode Go 应用名称和版本，默认 `go-llm-client/1.0` |
 | `Timeout` | (可选) 完整 HTTP 请求超时，默认 10 分钟，例如 `15*time.Minute` |
 | `SystemPrompt` | (可选) 系统预设人设；Responses 下可作为默认 instructions |
 | `Thinking` | (可选) `llm.Thinking()` 开启思考模式适配 |
 | `ReasoningEffort` | (可选) 思考等级，如 `llm.ReasoningEffortLow`、`llm.ReasoningEffortMedium`、`llm.ReasoningEffortHigh` |
-| `Parameters` | 两种协议的扩展请求字段；Responses 自动把 `max_tokens` 映射为 `max_output_tokens` |
+| `Parameters` | 各协议的扩展请求字段；Responses 自动把 `max_tokens` 映射为 `max_output_tokens` |
 | `ResponseInput` | Responses 模式的默认 `input` |
 | `Instructions` | Responses 模式的默认 instructions，可为字符串或结构化输入 |
 | `PreviousResponseID` | Responses 连续对话的默认前一响应 ID |
@@ -960,7 +1013,7 @@ func main() {
 | `Translation` | 翻译任务配置 |
 | `StreamCallback` | 文本输出增量回调 |
 | `ReasoningCallback` | 推理摘要增量回调 |
-| `EventCallback` | 所有 Responses SSE 事件或 Chat stream chunk 回调 |
+| `EventCallback` | 所有 Responses、Chat Completions 或 Anthropic Messages 流式事件回调 |
 | `Text2Image` | 开启文生图模式 |
 | `ImageEdit` | 开启图片编辑模式（由对应 provider 实现） |
 | `WebExtractor` | 网页抓取、联网搜索和代码解释器组合配置 |

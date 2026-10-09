@@ -23,6 +23,8 @@ type ClientConfig struct {
 	APIURL     string
 	HTTPClient *http.Client
 	Text2Image bool
+	SessionID  string
+	UserAgent  string
 }
 
 // NewClientConfig 创建一个带有默认值的客户端配置。
@@ -46,6 +48,16 @@ func WithAPIURL(url string) ClientOption {
 	return func(c *ClientConfig) {
 		c.APIURL = url
 	}
+}
+
+// WithSessionID sets a stable conversation identity for providers that require it.
+func WithSessionID(id string) ClientOption {
+	return func(c *ClientConfig) { c.SessionID = id }
+}
+
+// WithUserAgent identifies the application to providers that require it.
+func WithUserAgent(userAgent string) ClientOption {
+	return func(c *ClientConfig) { c.UserAgent = userAgent }
 }
 
 // WithHTTPClient 允许用户传入一个完全自定义的http.Client。

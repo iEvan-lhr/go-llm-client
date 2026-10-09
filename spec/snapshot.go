@@ -84,6 +84,9 @@ func CloneMessages(messages []Message) []Message {
 
 // Clone returns an independently mutable copy of a message.
 func (m Message) Clone() Message {
+	if m.AnthropicContent != nil {
+		m.AnthropicContent = append(json.RawMessage{}, m.AnthropicContent...)
+	}
 	if m.Parts != nil {
 		parts := make([]ContentPart, len(m.Parts))
 		copy(parts, m.Parts)

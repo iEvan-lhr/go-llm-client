@@ -7,7 +7,7 @@ type Response struct {
 	// Message 是模型返回的核心消息内容
 	Message Message
 
-	// Protocol identifies whether Chat Completions or Responses was used.
+	// Protocol identifies the provider's wire protocol.
 	Protocol Protocol
 
 	// ID, Model, Status, and Usage expose common protocol metadata.
