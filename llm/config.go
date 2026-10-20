@@ -25,7 +25,7 @@ type Config struct {
 	Model    string
 	APIKey   string
 	APIURL   string
-	// SessionID identifies an OpenCode Go conversation. Empty generates an ID
+	// SessionID identifies a session for OpenCode APIs. Empty generates an ID
 	// per client; stateless calls need an explicit ID to share a conversation.
 	SessionID string
 	// UserAgent identifies the calling application to OpenCode APIs. Empty uses

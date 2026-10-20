@@ -226,6 +226,8 @@ provider 按模型自动选择官方协议，`Send`、`SendStream`、独立调�
 
 GLM、Kimi 和 DeepSeek 的 Chat Completions 模型会将 `Thinking` 转换为 `thinking.type`；Messages 模型会转换为原生 `thinking` 配置，启用时默认预算为 1024 tokens、默认 `max_tokens` 为 4096，可通过 `Parameters` 覆盖预算。原生工具可直接通过 `Parameters["tools"]` 传入，标准 OpenAI function tools 和 tool results 会自动转换。图片和文档输入是否可用取决于模型。
 
+此 Go provider 通过统一 Chat 入口支持 Responses 模型；独立的 Responses 生命周期方法（如 `CreateResponse`、`RetrieveResponse`）仍由 `openai` provider 提供。Messages 模型的联网搜索需通过 `Parameters` 配置原生 search tools。
+
 ## OpenCode Jev / System One
 
 `Provider: "opencode"` 当前提供 Jev 的结构化决策接口，使用 **OpenCode Console API key**。默认模型为限时免费的 `jev-1.13-free`，默认端点为 `https://opencode.ai/inference/systemone/v1/systemone`。该接口不使用 `opencode-go` 的 `/zen/go/v1` 地址；免费模型的可用性以 [OpenCode 模型文档](https://opencode.ai/v2/docs/console/models/) 为准。
@@ -238,6 +240,8 @@ c, err := client.New(llm.Config{
     Provider: "opencode",
     Model:    "jev-1.13-free", // 也接受 opencode/jev-1.13-free
     APIKey:   os.Getenv("OPENCODE_API_KEY"),
+    UserAgent: "my-coding-agent/1.0", // 填写实际应用名称和版本
+    // SessionID: "jev-session-001", // 可选；省略时每个 client 自动生成
 })
 if err != nil {
     panic(err)
@@ -280,9 +284,53 @@ fmt.Println("输入/输出 tokens:", resp.Usage.InputTokens, resp.Usage.OutputTo
 
 `noul` 是 0～1 的“是”概率，`score` 是从零开始的评分等级的加权平均值，可以为小数。`Confidence`、`Probabilities` 和 `Legend` 保留官方字段；数字指针区分零值和缺失值，完整 JSON 保存在 `RawResponse`。字段语义见 [TypeSafe System One 文档](https://docs.typesafe.ai/api/system-one)。
 
-`APIURL` 可以覆盖完整端点或以 `/v1` 结尾的 System One 根地址（自动追加 `/systemone`）。`SystemOne` 使用 `APIKey`、`APIURL`、`Timeout`、`UserAgent` 和模型配置；聊天历史、`SystemPrompt`、采样参数、工具及流式回调不参与该调用。
+`APIURL` 可以覆盖完整端点或以 `/v1` 结尾的 System One 根地址（自动追加 `/systemone`）。`SystemOne` 使用 `APIKey`、`APIURL`、`Timeout`、`SessionID`、`UserAgent` 和模型配置；聊天历史、`SystemPrompt`、采样参数、工具及流式回调不参与该调用。
 
-此 provider 通过统一 Chat 入口支持 Responses 模型；独立的 Responses 生命周期方法（如 `CreateResponse`、`RetrieveResponse`）仍由 `openai` provider 提供。Messages 模型的联网搜索需通过 `Parameters` 配置原生 search tools。
+与 Go 渠道保持一致，System One 请求也携带 `x-opencode-session` 和 `User-Agent`。`SessionID` 省略时每个 client 独立生成并在后续调用中复用；无状态 `llm.SystemOne` 调用需要显式指定相同的 `SessionID` 才能共享会话标识。这个标识不保存或自动发送历史输入。官方 Jev 示例未声明该头为必需项，补齐会话头是否解决 HTTP 451 尚需实际响应验证。
+
+## 阿里云 MaaS 决策模型 / System One
+
+使用 `Provider: "dashscope"` 和部署实例的 `APIURL`，即可调用 `decision-model-preview`。该模型使用 `state` / `questions` 协议，通过 `SystemOne` 调用：
+
+```go
+c, err := client.New(llm.Config{
+    Provider: "dashscope",
+    Model:    "decision-model-preview",
+    APIURL:   "https://llm-ybt6gyan8n8us1zy.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/systemone",
+    APIKey:   os.Getenv("DASHSCOPE_SYSTEMONE_API_KEY"), // 此 MaaS 部署的 key
+})
+if err != nil {
+    panic(err)
+}
+
+resp, err := c.SystemOne(context.Background(), spec.SystemOneRequest{
+    State: map[string]any{
+        "ticket_id": "T-1001",
+        "content": "订单支付后超过 24 小时仍未到账，用户无法继续使用核心服务，要求立即处理。",
+    },
+    Questions: map[string]spec.SystemOneQuestion{
+        "escalate": {
+            Type: spec.SystemOneNoul,
+            Instructions: "是否需要立即通知值班人员？",
+        },
+    },
+})
+if err != nil {
+    panic(err)
+}
+fmt.Println("升级概率:", *resp.Answers["escalate"].Noul)
+fmt.Println("请求 ID:", resp.RequestID)
+fmt.Println("输入 tokens:", resp.Usage.InputTokens)
+if resp.LatencyMS != nil {
+    fmt.Println("服务端耗时 ms:", *resp.LatencyMS)
+}
+```
+
+同样支持 `choice` 和 `score`；含三种问题的完整示例见 [examples/dashscope-systemone/main.go](examples/dashscope-systemone/main.go)。设置 `DASHSCOPE_SYSTEMONE_API_KEY` 后可自行运行 `go run ./examples/dashscope-systemone`；也可用 `DASHSCOPE_SYSTEMONE_API_URL` 覆盖示例中的部署地址。
+
+`APIURL` 应填写实例地址，可以是完整 `/systemone` 端点、以 `/v1` 结尾的根地址，或该实例的 `/v1/chat/completions` 地址；后两者仅在调用 `SystemOne` 时解析为 `/v1/systemone`。不要省略实例地址而使用普通 DashScope 聊天接口。模型优先级为 `request.Model`、`cfg.Model`、`decision-model-preview`；也支持无状态入口 `llm.SystemOne(ctx, request, cfg)`。
+
+请求使用 `Authorization: Bearer <key>` 和 JSON 正文。该渠道不添加 OpenCode 会话头。`request_id` 和 `latency_ms` 分别映射到 `RequestID` 和 `LatencyMS`，完整响应保存在 `RawResponse`。当服务端省略 `output_tokens` 时，`Usage.OutputTokens` 为 Go 零值，不表示服务端报告了输出用量为零。
 
 ## ZHIPU AI（智谱）
 

@@ -8,7 +8,8 @@ import (
 )
 
 // SystemOne evaluates structured decisions. Request.Model takes precedence over
-// Config.Model; when both are empty, OpenCode uses jev-1.13-free. Chat settings
+// Config.Model; when both are empty, the provider selects its default decision
+// model (jev-1.13-free for OpenCode, decision-model-preview for DashScope). Chat settings
 // (history, system prompt, tools, sampling, and streaming) do not apply.
 func SystemOne(ctx context.Context, request spec.SystemOneRequest, cfg Config) (*spec.SystemOneResponse, error) {
 	provider, err := GetClient(cfg)
@@ -17,7 +18,7 @@ func SystemOne(ctx context.Context, request spec.SystemOneRequest, cfg Config) (
 	}
 	api, ok := provider.(spec.SystemOneClient)
 	if !ok {
-		return nil, fmt.Errorf("provider %q does not support System One; use provider opencode for Jev", cfg.Provider)
+		return nil, fmt.Errorf("provider %q does not support System One; use opencode for Jev or dashscope for decision models", cfg.Provider)
 	}
 	if request.Model == "" {
 		request.Model = cfg.Model

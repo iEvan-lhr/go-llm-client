@@ -84,7 +84,7 @@ func GetClient(cfg Config) (spec.Client, error) {
 
 	// An automatically generated OpenCode session belongs to this client,
 	// rather than every conversation sharing the same API key.
-	if cfg.Provider != "opencode-go" || cfg.SessionID != "" {
+	if (cfg.Provider != "opencode-go" && cfg.Provider != "opencode") || cfg.SessionID != "" {
 		clientCache[cacheKey] = newClient
 	}
 	return newClient, nil
