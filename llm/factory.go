@@ -8,6 +8,7 @@ import (
 	"github.com/iEvan-lhr/go-llm-client/providers/deepseek"
 	"github.com/iEvan-lhr/go-llm-client/providers/generic"
 	"github.com/iEvan-lhr/go-llm-client/providers/openai"
+	"github.com/iEvan-lhr/go-llm-client/providers/opencode"
 	"github.com/iEvan-lhr/go-llm-client/providers/opencodego"
 	"github.com/iEvan-lhr/go-llm-client/providers/openrouter" // ✅ 新增包导入
 	"github.com/iEvan-lhr/go-llm-client/providers/zhipu"
@@ -65,6 +66,8 @@ func GetClient(cfg Config) (spec.Client, error) {
 		newClient, err = openai.NewClient(clientOpts...)
 	case "opencode-go":
 		newClient, err = opencodego.NewClient(clientOpts...)
+	case "opencode":
+		newClient, err = opencode.NewClient(clientOpts...)
 	case "openrouter": // ✅ 新增 openrouter 匹配分支
 		newClient, err = openrouter.NewClient(clientOpts...)
 	case "deepseek":

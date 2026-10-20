@@ -28,7 +28,7 @@ type Config struct {
 	// SessionID identifies an OpenCode Go conversation. Empty generates an ID
 	// per client; stateless calls need an explicit ID to share a conversation.
 	SessionID string
-	// UserAgent identifies the calling application to OpenCode Go. Empty uses
+	// UserAgent identifies the calling application to OpenCode APIs. Empty uses
 	// go-llm-client/1.0.
 	UserAgent string
 	// Timeout controls the complete HTTP request duration. Zero uses the

@@ -12,6 +12,12 @@ type Client interface {
 	Model(name string) Model
 }
 
+// SystemOneClient evaluates typed questions without generating chat messages.
+type SystemOneClient interface {
+	Client
+	SystemOne(ctx context.Context, request SystemOneRequest) (*SystemOneResponse, error)
+}
+
 // WebSearchClient is implemented by providers with a standalone web search
 // endpoint. It is separate from model-hosted search configured by
 // WithWebSearch.

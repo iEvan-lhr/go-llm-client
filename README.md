@@ -4,7 +4,7 @@
 
 ## ✨ 核心特性
 
-* **统一接口**：一套代码适配 Dashscope (阿里云百炼)、OpenAI、OpenCode Go、ZHIPU AI（智谱）及各类私有化部署模型（Generic）。
+* **统一接口**：一套代码适配 Dashscope (阿里云百炼)、OpenAI、OpenCode Go、OpenCode System One、ZHIPU AI（智谱）及各类私有化部署模型（Generic）。
 * **客户端模式 (Client)**：内置上下文记忆管理，像聊天一样简单地调用。
 * **多模态输入与图像生成 (New 🚀)**：支持图片 URL/Base64/本地文件、音频、文档和文件 ID 输入，并支持 DashScope 异步文生图、OpenAI Responses `image_generation` 以及独立的 Images 生成/编辑 API。
 * **DashScope 实时语音识别**：统一支持 Qwen-Audio 3.0、Fun-ASR、Qwen3-ASR-Realtime 与 Paraformer 的双向 WebSocket 音频流和实时转写事件。
@@ -177,6 +177,8 @@ func main() {
 
 ## OpenCode Go
 
+> Jev 结构化决策模型请使用下文的 `opencode` / `SystemOne` 接口；它使用独立的 Console inference 端点，不走 Go 订阅聊天端点。
+
 将 `Provider` 设置为 `opencode-go`，使用 [OpenCode Console](https://opencode.ai/console) 中的 Go 订阅 API key。默认地址为 `https://opencode.ai/zen/go/v1`，无需手动填写 `APIURL`：
 
 ```go
@@ -223,6 +225,62 @@ provider 按模型自动选择官方协议，`Send`、`SendStream`、独立调�
 三种协议都支持正文、思考内容、工具调用、结束原因、token 用量和流式回调。Messages 响应在 `Message.AnthropicContent` 中保留原生块和思考签名，多轮对话会自动回传；若要修改回复再发送，请清空该字段。缓存读取和写入计数可通过 `CachedTokens()`、`CacheWriteTokens()` 和 `CacheUsage()` 获取。
 
 GLM、Kimi 和 DeepSeek 的 Chat Completions 模型会将 `Thinking` 转换为 `thinking.type`；Messages 模型会转换为原生 `thinking` 配置，启用时默认预算为 1024 tokens、默认 `max_tokens` 为 4096，可通过 `Parameters` 覆盖预算。原生工具可直接通过 `Parameters["tools"]` 传入，标准 OpenAI function tools 和 tool results 会自动转换。图片和文档输入是否可用取决于模型。
+
+## OpenCode Jev / System One
+
+`Provider: "opencode"` 当前提供 Jev 的结构化决策接口，使用 **OpenCode Console API key**。默认模型为限时免费的 `jev-1.13-free`，默认端点为 `https://opencode.ai/inference/systemone/v1/systemone`。该接口不使用 `opencode-go` 的 `/zen/go/v1` 地址；免费模型的可用性以 [OpenCode 模型文档](https://opencode.ai/v2/docs/console/models/) 为准。
+
+Jev 评估 `state` 和具名 `questions`，不生成聊天文本。请调用 `SystemOne`，不要使用 `Send`、`Chat` 或流式方法。请求支持文本、对象或数组形式的 `State`，同一次请求可混合多种问题：
+
+```go
+// 使用本项目的 llm、client 和 spec 包。
+c, err := client.New(llm.Config{
+    Provider: "opencode",
+    Model:    "jev-1.13-free", // 也接受 opencode/jev-1.13-free
+    APIKey:   os.Getenv("OPENCODE_API_KEY"),
+})
+if err != nil {
+    panic(err)
+}
+
+resp, err := c.SystemOne(context.Background(), spec.SystemOneRequest{
+    State: "My order arrived late and the item is damaged. I want a refund now.",
+    Questions: map[string]spec.SystemOneQuestion{
+        "is_urgent": {
+            Type:         spec.SystemOneNoul,
+            Instructions: "Does this request require urgent attention?",
+        },
+        "department": {
+            Type:         spec.SystemOneChoice,
+            Instructions: "Which team should handle this request?",
+            Criteria: map[string]string{
+                "returns":  "Refunds, exchanges, or damaged items",
+                "shipping": "Delivery delays or lost packages",
+                "billing":  "Charges, invoices, or payment problems",
+            },
+        },
+        "frustration": {
+            Type:         spec.SystemOneScore,
+            Instructions: "How frustrated is the customer?",
+            Criteria:     []string{"Calm", "Frustrated", "Very angry"},
+        },
+    },
+})
+if err != nil {
+    panic(err)
+}
+fmt.Println("紧急概率:", *resp.Answers["is_urgent"].Noul)
+fmt.Println("处理部门:", resp.Answers["department"].Choice)
+fmt.Println("部门概率分布:", resp.Answers["department"].Probabilities)
+fmt.Println("情绪评分:", *resp.Answers["frustration"].Score)
+fmt.Println("输入/输出 tokens:", resp.Usage.InputTokens, resp.Usage.OutputTokens)
+```
+
+也可无状态调用 `llm.SystemOne(ctx, request, cfg)`，或使用 `providers/opencode.NewClient(spec.WithAPIKey(key))` 后直接调用 `SystemOne`。模型优先级为 `request.Model`、`cfg.Model`、`jev-1.13-free`；只有显式指定 `jev-1.13` 才会选择该非免费型号，不会自动回退到付费模型。
+
+`noul` 是 0～1 的“是”概率，`score` 是从零开始的评分等级的加权平均值，可以为小数。`Confidence`、`Probabilities` 和 `Legend` 保留官方字段；数字指针区分零值和缺失值，完整 JSON 保存在 `RawResponse`。字段语义见 [TypeSafe System One 文档](https://docs.typesafe.ai/api/system-one)。
+
+`APIURL` 可以覆盖完整端点或以 `/v1` 结尾的 System One 根地址（自动追加 `/systemone`）。`SystemOne` 使用 `APIKey`、`APIURL`、`Timeout`、`UserAgent` 和模型配置；聊天历史、`SystemPrompt`、采样参数、工具及流式回调不参与该调用。
 
 此 provider 通过统一 Chat 入口支持 Responses 模型；独立的 Responses 生命周期方法（如 `CreateResponse`、`RetrieveResponse`）仍由 `openai` provider 提供。Messages 模型的联网搜索需通过 `Parameters` 配置原生 search tools。
 
@@ -995,7 +1053,7 @@ func main() {
 
 | 字段 | 说明 |
 | --- | --- |
-| `Provider` | 厂商标识: `dashscope`, `openai`, `opencode-go`, `zhipu`, `deepseek`, `openrouter`, `generic` |
+| `Provider` | 厂商标识: `dashscope`, `openai`, `opencode-go`, `opencode`（System One）, `zhipu`, `deepseek`, `openrouter`, `generic` |
 | `Model` | 模型名称: `qwen-plus`, `gpt-4o`, `qwen-image-plus` 等 |
 | `APIKey` | API 密钥 |
 | `APIURL` | (可选) 自定义接口地址，用于代理或私有部署 |

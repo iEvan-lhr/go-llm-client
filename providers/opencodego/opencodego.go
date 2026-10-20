@@ -88,6 +88,9 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 	if name == "" {
 		return nil, fmt.Errorf("opencode-go provider: model is required")
 	}
+	if strings.HasPrefix(strings.TrimPrefix(name, "opencode/"), "jev-") {
+		return nil, fmt.Errorf("opencode-go provider: Jev uses the Console System One API; use provider opencode and SystemOne with state and questions")
+	}
 	parameters, err := spec.SnapshotParameters(config.Parameters)
 	if err != nil {
 		return nil, err
