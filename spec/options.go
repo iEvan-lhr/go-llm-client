@@ -19,12 +19,14 @@ type ClientOption func(c *ClientConfig)
 // ClientConfig 存储了客户端级别的所有配置。
 // 这是一个不导出的结构体，用户通过ClientOption函数来修改它。
 type ClientConfig struct {
-	APIKey     string
-	APIURL     string
-	HTTPClient *http.Client
-	Text2Image bool
-	SessionID  string
-	UserAgent  string
+	APIKey       string
+	APIURL       string
+	HTTPClient   *http.Client
+	Text2Image   bool
+	SessionID    string
+	UserAgent    string
+	Organization string
+	Project      string
 }
 
 // NewClientConfig 创建一个带有默认值的客户端配置。
@@ -48,6 +50,14 @@ func WithAPIURL(url string) ClientOption {
 	return func(c *ClientConfig) {
 		c.APIURL = url
 	}
+}
+
+func WithOrganization(organization string) ClientOption {
+	return func(c *ClientConfig) { c.Organization = organization }
+}
+
+func WithProject(project string) ClientOption {
+	return func(c *ClientConfig) { c.Project = project }
 }
 
 // WithSessionID sets a stable conversation identity for providers that require it.

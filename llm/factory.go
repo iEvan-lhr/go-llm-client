@@ -24,7 +24,7 @@ var (
 // GetClient 负责创建和缓存客户端实例。
 // 它是导出的，因此 client 包可以使用它。
 func GetClient(cfg Config) (spec.Client, error) {
-	cacheKey := fmt.Sprintf("%q|%q|%q|%d|%q|%q", cfg.Provider, cfg.APIURL, cfg.APIKey, cfg.Timeout, cfg.SessionID, cfg.UserAgent)
+	cacheKey := fmt.Sprintf("%q|%q|%q|%d|%q|%q|%q|%q", cfg.Provider, cfg.APIURL, cfg.APIKey, cfg.Timeout, cfg.SessionID, cfg.UserAgent, cfg.Organization, cfg.Project)
 
 	cacheMutex.RLock()
 	client, found := clientCache[cacheKey]
@@ -46,6 +46,8 @@ func GetClient(cfg Config) (spec.Client, error) {
 		spec.WithAPIKey(cfg.APIKey),
 		spec.WithSessionID(cfg.SessionID),
 		spec.WithUserAgent(cfg.UserAgent),
+		spec.WithOrganization(cfg.Organization),
+		spec.WithProject(cfg.Project),
 	}
 	if cfg.APIURL != "" {
 		clientOpts = append(clientOpts, spec.WithAPIURL(cfg.APIURL))

@@ -26,6 +26,9 @@ func (c *Client) CreateResponse(ctx context.Context, request spec.ResponseCreate
 	if request.Model == "" {
 		request.Model = c.config.Model
 	}
+	if request.Input == nil {
+		request.Input = c.config.ResponseInput
+	}
 	if request.Instructions == nil {
 		if c.config.Instructions != nil {
 			request.Instructions = c.config.Instructions
@@ -33,7 +36,7 @@ func (c *Client) CreateResponse(ctx context.Context, request spec.ResponseCreate
 			request.Instructions = c.config.SystemPrompt
 		}
 	}
-	if request.PreviousResponseID == "" {
+	if request.PreviousResponseID == "" && request.Conversation == nil {
 		request.PreviousResponseID = c.config.PreviousResponseID
 	}
 	cache := spec.PromptCacheConfig{}
@@ -51,6 +54,25 @@ func (c *Client) CreateResponse(ctx context.Context, request spec.ResponseCreate
 	}
 	if cache.Key != "" || cache.Retention != "" || cache.Options != nil || cache.Capabilities != nil {
 		opts = append([]spec.Option{spec.WithPromptCache(cache)}, opts...)
+	}
+	// Defaults are applied before the request envelope; explicit per-call
+	// options remain the final override. Do not let default tools/input replace
+	// a typed request's tools/input.
+	defaults, err := spec.SnapshotParameters(c.config.Parameters)
+	if err != nil {
+		return nil, err
+	}
+	if defaults == nil {
+		defaults = make(map[string]any)
+	}
+	for key, value := range request.ExtraFields {
+		defaults[key] = value
+	}
+	request.ExtraFields = defaults
+	c.config.Parameters = nil
+	if request.Reasoning != nil {
+		c.config.ReasoningEffort = ""
+		c.config.Thinking = nil
 	}
 	return api.CreateResponse(ctx, request, c.responseOptions(opts...)...)
 }
@@ -187,7 +209,7 @@ func (c *Client) DeleteConversationItem(ctx context.Context, conversationID, ite
 // base64 image payloads.
 func (c *Client) GenerateImage(ctx context.Context, prompt string, tool spec.ResponseTool, opts ...spec.Option) (*spec.Response, error) {
 	if tool.Type == "" {
-		tool = spec.NewImageGenerationTool()
+		tool.Type = "image_generation"
 	}
 	if tool.Type != "image_generation" {
 		return nil, fmt.Errorf("image generation tool type must be image_generation")

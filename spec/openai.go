@@ -123,8 +123,11 @@ type ResponseOutputItem struct {
 	PendingSafetyChecks      []json.RawMessage       `json:"pending_safety_checks,omitempty"`
 	AcknowledgedSafetyChecks []json.RawMessage       `json:"acknowledged_safety_checks,omitempty"`
 	Error                    *APIError               `json:"error,omitempty"`
-	Phase                    string                  `json:"phase,omitempty"`
-	Raw                      json.RawMessage         `json:"-"`
+	// ToolError preserves the exact hosted-tool error JSON. Clear it when
+	// replacing the parsed Error field before marshaling.
+	ToolError json.RawMessage `json:"-"`
+	Phase     string          `json:"phase,omitempty"`
+	Raw       json.RawMessage `json:"-"`
 }
 
 const (
@@ -382,6 +385,11 @@ type StreamEvent struct {
 	SummaryIndex      int             `json:"summary_index,omitempty"`
 	AnnotationIndex   int             `json:"annotation_index,omitempty"`
 	PartialImageIndex int             `json:"partial_image_index,omitempty"`
+	PartialImageB64   string          `json:"partial_image_b64,omitempty"`
+	Text              string          `json:"text,omitempty"`
+	Arguments         string          `json:"arguments,omitempty"`
+	Name              string          `json:"name,omitempty"`
+	Error             *APIError       `json:"error,omitempty"`
 	Code              string          `json:"code,omitempty"`
 	Message           string          `json:"message,omitempty"`
 	Obfuscation       string          `json:"obfuscation,omitempty"`

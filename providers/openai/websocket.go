@@ -57,7 +57,7 @@ func (c *clientImpl) ConnectResponseWebSocket(ctx context.Context) (spec.Respons
 }
 
 func (c *responseWebSocket) CreateResponse(ctx context.Context, request spec.ResponseCreateRequest) error {
-	if request.Model == "" {
+	if request.Model == "" && request.Prompt == nil && request.ExtraFields["prompt"] == nil {
 		return fmt.Errorf("openai responses websocket: model is required")
 	}
 	if request.Background != nil && *request.Background {

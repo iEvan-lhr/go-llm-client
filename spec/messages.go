@@ -36,6 +36,9 @@ type Message struct {
 	// AnthropicContent preserves native blocks, including signed thinking, for
 	// replay in an Anthropic Messages conversation. Clear it to edit the reply.
 	AnthropicContent json.RawMessage `json:"-"`
+	// ResponsesOutput retains native output items (including reasoning and
+	// hosted tools) for replay. Clear it before editing a Responses reply.
+	ResponsesOutput json.RawMessage `json:"-"`
 }
 
 // NewSystemMessage 创建一条系统消息

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/iEvan-lhr/go-llm-client/spec"
 )
 
 // Requester 封装了执行HTTP请求的通用逻辑。
@@ -51,24 +53,15 @@ func (r *Requester) Do(ctx context.Context, method, url string, headers http.Hea
 // DoBody executes a request whose body and content type have already been
 // prepared by the caller, for example a multipart/form-data request.
 func (r *Requester) DoBody(ctx context.Context, method, url string, headers http.Header, body io.Reader) ([]byte, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, method, url, body)
+	resp, err := r.DoBodyStream(ctx, method, url, headers, body)
 	if err != nil {
-		return nil, fmt.Errorf("requester: failed to create request: %w", err)
-	}
-	httpReq.Header = headers.Clone()
-
-	resp, err := r.HTTPClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("requester: request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	rawBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("requester: failed to read response body: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("requester: API error (status %d): %s", resp.StatusCode, string(rawBody))
 	}
 	return rawBody, nil
 }
@@ -95,7 +88,12 @@ func (r *Requester) DoStream(ctx context.Context, method, url string, headers ht
 		}
 		body = bytes.NewReader(jsonBody)
 	}
+	return r.DoBodyStream(ctx, method, url, headers, body)
+}
 
+// DoBodyStream supports streaming responses to multipart and binary requests.
+// The caller must close a successful response body.
+func (r *Requester) DoBodyStream(ctx context.Context, method, url string, headers http.Header, body io.Reader) (*http.Response, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, fmt.Errorf("requester: failed to create request: %w", err)
@@ -109,7 +107,14 @@ func (r *Requester) DoStream(ctx context.Context, method, url string, headers ht
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		rawBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("requester: API error (status %d): %s", resp.StatusCode, string(rawBody))
+		var envelope struct {
+			Error *spec.APIError `json:"error"`
+		}
+		_ = json.Unmarshal(rawBody, &envelope)
+		return nil, &spec.HTTPError{
+			StatusCode: resp.StatusCode, RequestID: resp.Header.Get("X-Request-ID"),
+			Header: resp.Header.Clone(), Body: rawBody, APIError: envelope.Error,
+		}
 	}
 	return resp, nil
 }

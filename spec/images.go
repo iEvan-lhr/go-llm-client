@@ -1,6 +1,8 @@
 package spec
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 )
@@ -32,21 +34,57 @@ func (r ImageGenerationRequest) MarshalJSON() ([]byte, error) {
 
 // ImageEditRequest contains the fields sent to the multipart Images edits API.
 type ImageEditRequest struct {
-	Model             string
-	Prompt            string
-	Image             ImageFile
+	Model  string
+	Prompt string
+	Image  ImageFile
+	// Images uploads multiple references using image[]. Use either Image or Images.
+	Images            []ImageFile
 	Mask              *ImageFile
 	Background        string
 	InputFidelity     string
 	N                 int
 	OutputCompression *int
 	OutputFormat      string
+	PartialImages     int
 	Quality           string
 	ResponseFormat    string
 	Size              string
 	User              string
 	ExtraFields       map[string]string
 }
+
+// ImageVariationRequest is the multipart request for /images/variations.
+// Model support differs from generation/editing (for example, dall-e-2).
+type ImageVariationRequest struct {
+	Model          string
+	Image          ImageFile
+	N              int
+	ResponseFormat string
+	Size           string
+	User           string
+	ExtraFields    map[string]string
+}
+
+// ImageStreamEvent contains a partial or completed image. Raw retains all
+// fields, including newly introduced event types.
+type ImageStreamEvent struct {
+	Type              string          `json:"type"`
+	CreatedAt         int64           `json:"created_at,omitempty"`
+	Base64JSON        string          `json:"b64_json,omitempty"`
+	PartialImageIndex int             `json:"partial_image_index,omitempty"`
+	Background        string          `json:"background,omitempty"`
+	OutputFormat      string          `json:"output_format,omitempty"`
+	Quality           string          `json:"quality,omitempty"`
+	Size              string          `json:"size,omitempty"`
+	Usage             *ImageUsage     `json:"usage,omitempty"`
+	Error             *APIError       `json:"error,omitempty"`
+	Code              string          `json:"code,omitempty"`
+	Message           string          `json:"message,omitempty"`
+	Raw               json.RawMessage `json:"-"`
+}
+
+// ImageEventCallback may return an error to stop reading and close the stream.
+type ImageEventCallback func(context.Context, ImageStreamEvent) error
 
 // ImageFile is an in-memory file uploaded by an Images API request.
 type ImageFile struct {

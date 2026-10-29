@@ -10,17 +10,19 @@ type Embedded interface {
 
 // EmbeddingData 单条向量数据的结构
 type EmbeddingData struct {
-	Object    string    `json:"object"`
-	Embedding []float32 `json:"embedding"`
-	Index     int       `json:"index"`
+	Object          string    `json:"object"`
+	Embedding       []float32 `json:"embedding"`
+	Index           int       `json:"index"`
+	Base64Embedding string    `json:"-"`
 }
 
 // EmbeddingResponse 向量化接口的完整响应结构 (兼容 OpenAI 规范)
 type EmbeddingResponse struct {
-	Object string          `json:"object"`
-	Data   []EmbeddingData `json:"data"`
-	Model  string          `json:"model"`
-	Usage  EmbeddingUsage  `json:"usage"`
+	Object      string          `json:"object"`
+	Data        []EmbeddingData `json:"data"`
+	Model       string          `json:"model"`
+	Usage       EmbeddingUsage  `json:"usage"`
+	RawResponse []byte          `json:"-"`
 }
 
 // EmbeddingUsage 向量化调用的 Token 消耗

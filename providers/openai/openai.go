@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,6 +39,9 @@ func NewClient(opts ...spec.ClientOption) (spec.Client, error) {
 	if config.APIKey == "" {
 		return nil, fmt.Errorf("openai provider: API key is required, use spec.WithAPIKey()")
 	}
+	if config.HTTPClient == nil {
+		return nil, fmt.Errorf("openai provider: HTTP client must not be nil")
+	}
 
 	return &clientImpl{
 		requester: &requester.Requester{
@@ -44,6 +49,16 @@ func NewClient(opts ...spec.ClientOption) (spec.Client, error) {
 		},
 		config: *config,
 	}, nil
+}
+
+// NewAPIClient exposes Responses, Images, Embeddings, Models, Moderations,
+// and Audio through one typed client.
+func NewAPIClient(opts ...spec.ClientOption) (spec.OpenAIClient, error) {
+	c, err := NewClient(opts...)
+	if err != nil {
+		return nil, err
+	}
+	return c.(*clientImpl), nil
 }
 
 // Model implements spec.Client.
@@ -68,6 +83,23 @@ func (m *modelImpl) Chat(ctx context.Context, messages []spec.Message, opts ...s
 }
 
 func (m *modelImpl) chatCompletions(ctx context.Context, messages []spec.Message, config *spec.RequestConfig) (*spec.Response, error) {
+	// Accept an API root as well as the historical full endpoint URL.
+	parsedURL, err := url.Parse(m.client.config.APIURL)
+	if err != nil {
+		return nil, fmt.Errorf("openai: invalid API URL: %w", err)
+	}
+	path := strings.TrimRight(parsedURL.Path, "/")
+	if path == "" || strings.HasSuffix(path, "/v1") {
+		endpoint, err := apiEndpointURL(m.client.config.APIURL, "chat/completions")
+		if err != nil {
+			return nil, err
+		}
+		clientCopy := *m.client
+		clientCopy.config.APIURL = endpoint
+		modelCopy := *m
+		modelCopy.client = &clientCopy
+		m = &modelCopy
+	}
 	requestBody := cloneParameters(config.Parameters)
 	requestBody["model"] = m.name
 	requestBody["messages"] = chatMessages(messages)
@@ -90,7 +122,7 @@ func (m *modelImpl) chatCompletions(ctx context.Context, messages []spec.Message
 		}
 	}
 	applyPromptCache(requestBody, config.PromptCache)
-	if config.Streaming {
+	if stream, _ := requestBody["stream"].(bool); config.Streaming || stream {
 		requestBody["stream"] = true
 		if _, configured := requestBody["stream_options"]; !configured {
 			requestBody["stream_options"] = map[string]bool{"include_usage": true}
@@ -144,7 +176,9 @@ func (m *modelImpl) responses(ctx context.Context, messages []spec.Message, conf
 		delete(requestBody, "max_tokens")
 	}
 
-	requestBody["model"] = m.name
+	if m.name != "" {
+		requestBody["model"] = m.name
+	}
 	switch {
 	case config.ResponseInput != nil:
 		input, err := normalizeResponseInput(config.ResponseInput)
@@ -153,13 +187,19 @@ func (m *modelImpl) responses(ctx context.Context, messages []spec.Message, conf
 		}
 		requestBody["input"] = input
 	case requestBody["input"] != nil:
-		// Keep a forward-compatible input supplied through Parameters.
-	default:
-		input, err := responsesInput(messages)
+		input, err := normalizeResponseInput(requestBody["input"])
 		if err != nil {
 			return nil, err
 		}
 		requestBody["input"] = input
+	default:
+		if len(messages) > 0 {
+			input, err := responsesInput(messages)
+			if err != nil {
+				return nil, err
+			}
+			requestBody["input"] = input
+		}
 	}
 	if config.Instructions != nil {
 		requestBody["instructions"] = config.Instructions
@@ -186,7 +226,7 @@ func (m *modelImpl) responses(ctx context.Context, messages []spec.Message, conf
 	}
 	applyPromptCache(requestBody, config.PromptCache)
 
-	if config.Streaming {
+	if stream, _ := requestBody["stream"].(bool); config.Streaming || stream {
 		requestBody["stream"] = true
 		return m.streamResponses(ctx, requestBody, config)
 	}
@@ -221,7 +261,7 @@ func (m *modelImpl) streamChatCompletions(ctx context.Context, requestBody map[s
 
 	err = scanSSE(resp, func(data string) error {
 		if data == "[DONE]" {
-			return nil
+			return errSSEDone
 		}
 
 		raw := json.RawMessage(append([]byte(nil), data...))
@@ -343,29 +383,35 @@ func (m *modelImpl) consumeResponsesStream(ctx context.Context, resp *http.Respo
 	var reasoning strings.Builder
 	var terminalResponse json.RawMessage
 	var outputItems []spec.ResponseOutputItem
+	var streamMetadata spec.ResponsesAPIResponse
+	sawDone := false
 
 	err := scanSSE(resp, func(data string) error {
 		if data == "[DONE]" {
-			return nil
+			sawDone = true
+			return errSSEDone
 		}
 
 		raw := json.RawMessage(append([]byte(nil), data...))
-		var event struct {
-			spec.StreamEvent
-			Error *spec.APIError `json:"error"`
-		}
+		var event spec.StreamEvent
 		if err := json.Unmarshal(raw, &event); err != nil {
 			return fmt.Errorf("openai responses: failed to decode stream event: %w", err)
 		}
 		event.Protocol = spec.ProtocolResponses
 		event.Raw = raw
 		if config.EventCallback != nil {
-			if err := config.EventCallback(ctx, event.StreamEvent); err != nil {
+			if err := config.EventCallback(ctx, event); err != nil {
 				return err
 			}
 		}
 
 		switch event.Type {
+		case "response.created", "response.in_progress":
+			if len(event.Response) > 0 {
+				if err := json.Unmarshal(event.Response, &streamMetadata); err != nil {
+					return fmt.Errorf("openai responses: decode response metadata: %w", err)
+				}
+			}
 		case "response.output_text.delta":
 			if event.Delta == "" {
 				return nil
@@ -398,7 +444,11 @@ func (m *modelImpl) consumeResponsesStream(ctx context.Context, resp *http.Respo
 				outputItems = append(outputItems, item)
 			}
 		case "response.completed", "response.incomplete":
+			if len(event.Response) == 0 || string(event.Response) == "null" {
+				return fmt.Errorf("openai responses: terminal event has no response")
+			}
 			terminalResponse = append(terminalResponse[:0], event.Response...)
+			return errSSEDone
 		case "response.failed":
 			terminalResponse = append(terminalResponse[:0], event.Response...)
 			return responsesStreamFailure(event.Type, event.Response)
@@ -426,37 +476,46 @@ func (m *modelImpl) consumeResponsesStream(ctx context.Context, resp *http.Respo
 		if parseErr != nil {
 			return nil, parseErr
 		}
-		if fullContent.Len() > 0 {
+		if message.Content == "" && fullContent.Len() > 0 {
 			message.Content = fullContent.String()
 		}
-		if refusal.Len() > 0 {
+		if message.Refusal == "" && refusal.Len() > 0 {
 			message.Refusal = refusal.String()
 			if message.Content == "" {
 				message.Content = refusal.String()
 			}
 		}
-		if reasoning.Len() > 0 {
+		if message.ReasoningContent == "" && reasoning.Len() > 0 {
 			message.ReasoningContent = reasoning.String()
 		}
 		return newResponsesResult(parsed, message, terminalResponse), nil
 	}
-
-	parsed := &spec.ResponsesAPIResponse{
-		Model:      fmt.Sprint(requestBody["model"]),
-		Status:     "completed",
-		Output:     outputItems,
-		OutputText: fullContent.String(),
+	if !sawDone {
+		return nil, fmt.Errorf("openai responses: stream ended before a terminal event: %w", io.ErrUnexpectedEOF)
 	}
-	message := spec.Message{
-		Role:             spec.RoleAssistant,
-		Content:          fullContent.String(),
-		Refusal:          refusal.String(),
-		ReasoningContent: reasoning.String(),
+
+	parsed := &streamMetadata
+	if parsed.Model == "" {
+		parsed.Model = m.name
+	}
+	parsed.Status, parsed.Output, parsed.OutputText = "completed", outputItems, fullContent.String()
+	rawBody, err := json.Marshal(parsed)
+	if err != nil {
+		return nil, err
+	}
+	_, message, err := parseResponses(rawBody)
+	if err != nil {
+		return nil, err
+	}
+	if message.Refusal == "" {
+		message.Refusal = refusal.String()
+	}
+	if message.ReasoningContent == "" {
+		message.ReasoningContent = reasoning.String()
 	}
 	if message.Content == "" {
 		message.Content = message.Refusal
 	}
-	rawBody, _ := json.Marshal(parsed)
 	return newResponsesResult(parsed, message, rawBody), nil
 }
 
@@ -464,6 +523,15 @@ func (m *modelImpl) headers() http.Header {
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json")
 	headers.Set("Authorization", "Bearer "+m.client.config.APIKey)
+	if m.client.config.Organization != "" {
+		headers.Set("OpenAI-Organization", m.client.config.Organization)
+	}
+	if m.client.config.Project != "" {
+		headers.Set("OpenAI-Project", m.client.config.Project)
+	}
+	if m.client.config.UserAgent != "" {
+		headers.Set("User-Agent", m.client.config.UserAgent)
+	}
 	return headers
 }
 
@@ -851,58 +919,87 @@ func normalizeResponseInput(input any) (any, error) {
 	}
 }
 
-func responsesInput(messages []spec.Message) ([]responsesInputMessage, error) {
-	input := make([]responsesInputMessage, 0, len(messages))
+func responsesInput(messages []spec.Message) ([]any, error) {
+	input := make([]any, 0, len(messages))
 	for _, message := range messages {
-		if len(message.Parts) == 0 {
-			input = append(input, responsesInputMessage{Role: message.Role, Content: message.Content})
+		if message.Role == spec.RoleAssistant && len(message.ResponsesOutput) > 0 {
+			var output []json.RawMessage
+			if err := json.Unmarshal(message.ResponsesOutput, &output); err != nil {
+				return nil, fmt.Errorf("openai responses: decode replay output: %w", err)
+			}
+			for _, item := range output {
+				input = append(input, item)
+			}
 			continue
 		}
-
-		parts := make([]responsesInputPart, 0, len(message.Parts))
-		for _, part := range message.Parts {
-			switch part.Type {
-			case "text", "input_text":
-				parts = append(parts, responsesInputPart{Type: "input_text", Text: part.Text})
-			case "image_url", "input_image":
-				if (part.ImageURL == nil || part.ImageURL.URL == "") && part.FileID == "" {
-					return nil, fmt.Errorf("openai responses: image content part requires image_url or file_id")
+		if message.Role == spec.RoleTool && message.ToolCallID == "" {
+			return nil, fmt.Errorf("openai responses: tool message requires tool_call_id")
+		}
+		if len(message.Parts) == 0 {
+			if message.Role == spec.RoleTool {
+				input = append(input, spec.NewFunctionCallOutput(message.ToolCallID, message.Content))
+			} else if message.Content != "" || len(message.ToolCalls) == 0 {
+				input = append(input, responsesInputMessage{Role: message.Role, Content: message.Content})
+			}
+		} else {
+			parts := make([]responsesInputPart, 0, len(message.Parts))
+			for _, part := range message.Parts {
+				switch part.Type {
+				case "text", "input_text":
+					parts = append(parts, responsesInputPart{Type: "input_text", Text: part.Text})
+				case "image_url", "input_image":
+					if (part.ImageURL == nil || part.ImageURL.URL == "") && part.FileID == "" {
+						return nil, fmt.Errorf("openai responses: image content part requires image_url or file_id")
+					}
+					var imageURL, detail string
+					if part.ImageURL != nil {
+						imageURL = part.ImageURL.URL
+						detail = part.ImageURL.Detail
+					}
+					parts = append(parts, responsesInputPart{
+						Type:     "input_image",
+						ImageURL: imageURL,
+						FileID:   part.FileID,
+						Detail:   detail,
+					})
+				case "file", "input_file":
+					if part.FileURL == "" && part.FileID == "" && part.FileData == "" {
+						return nil, fmt.Errorf("openai responses: file content part requires file_url, file_id, or file_data")
+					}
+					parts = append(parts, responsesInputPart{
+						Type:     "input_file",
+						FileURL:  part.FileURL,
+						FileID:   part.FileID,
+						FileData: part.FileData,
+						Filename: part.Filename,
+					})
+				case "input_audio", "audio":
+					if part.InputAudio == nil || part.InputAudio.Data == "" || part.InputAudio.Format == "" {
+						return nil, fmt.Errorf("openai responses: audio content part requires base64 data and format")
+					}
+					parts = append(parts, responsesInputPart{
+						Type:       "input_audio",
+						InputAudio: part.InputAudio,
+					})
+				default:
+					return nil, fmt.Errorf("openai responses: unsupported content part type %q", part.Type)
 				}
-				var imageURL, detail string
-				if part.ImageURL != nil {
-					imageURL = part.ImageURL.URL
-					detail = part.ImageURL.Detail
-				}
-				parts = append(parts, responsesInputPart{
-					Type:     "input_image",
-					ImageURL: imageURL,
-					FileID:   part.FileID,
-					Detail:   detail,
-				})
-			case "file", "input_file":
-				if part.FileURL == "" && part.FileID == "" && part.FileData == "" {
-					return nil, fmt.Errorf("openai responses: file content part requires file_url, file_id, or file_data")
-				}
-				parts = append(parts, responsesInputPart{
-					Type:     "input_file",
-					FileURL:  part.FileURL,
-					FileID:   part.FileID,
-					FileData: part.FileData,
-					Filename: part.Filename,
-				})
-			case "input_audio", "audio":
-				if part.InputAudio == nil || part.InputAudio.Data == "" || part.InputAudio.Format == "" {
-					return nil, fmt.Errorf("openai responses: audio content part requires base64 data and format")
-				}
-				parts = append(parts, responsesInputPart{
-					Type:       "input_audio",
-					InputAudio: part.InputAudio,
-				})
-			default:
-				return nil, fmt.Errorf("openai responses: unsupported content part type %q", part.Type)
+			}
+			if message.Role == spec.RoleTool {
+				input = append(input, spec.NewFunctionCallOutput(message.ToolCallID, parts))
+			} else {
+				input = append(input, responsesInputMessage{Role: message.Role, Content: parts})
 			}
 		}
-		input = append(input, responsesInputMessage{Role: message.Role, Content: parts})
+		for _, call := range message.ToolCalls {
+			if call.Type != "" && call.Type != "function" {
+				return nil, fmt.Errorf("openai responses: unsupported chat tool call type %q; use ResponseInputItem for custom tools", call.Type)
+			}
+			if call.ID == "" || call.Function.Name == "" {
+				return nil, fmt.Errorf("openai responses: function call requires ID and name")
+			}
+			input = append(input, spec.ResponseInputItem{Type: "function_call", CallID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments})
+		}
 	}
 	return input, nil
 }
@@ -911,6 +1008,12 @@ func parseResponses(rawBody []byte) (*spec.ResponsesAPIResponse, spec.Message, e
 	var response spec.ResponsesAPIResponse
 	if err := json.Unmarshal(rawBody, &response); err != nil {
 		return nil, spec.Message{}, fmt.Errorf("openai responses: failed to unmarshal response: %w", err)
+	}
+	if response.Error != nil {
+		return nil, spec.Message{}, response.Error
+	}
+	if response.Status == "failed" {
+		return nil, spec.Message{}, fmt.Errorf("openai responses: response failed")
 	}
 
 	role := spec.RoleAssistant
@@ -961,6 +1064,15 @@ func parseResponses(rawBody []byte) (*spec.ResponsesAPIResponse, spec.Message, e
 	}
 	if message.Content == "" {
 		message.Content = message.Refusal
+	}
+	if len(response.Output) > 0 {
+		var native struct {
+			Output json.RawMessage `json:"output"`
+		}
+		if err := json.Unmarshal(rawBody, &native); err != nil {
+			return nil, spec.Message{}, err
+		}
+		message.ResponsesOutput = native.Output
 	}
 	return &response, message, nil
 }
@@ -1037,6 +1149,8 @@ func parseURLCitation(raw json.RawMessage) (spec.URLCitation, bool) {
 	}, true
 }
 
+var errSSEDone = errors.New("openai: SSE completed")
+
 func scanSSE(resp *http.Response, handleData func(string) error) error {
 	scanner := bufio.NewScanner(resp.Body)
 	// Image/audio/tool events can contain large base64 payloads. Keep the
@@ -1057,6 +1171,9 @@ func scanSSE(resp *http.Response, handleData func(string) error) error {
 		line := scanner.Text()
 		if line == "" {
 			if err := dispatch(); err != nil {
+				if err == errSSEDone {
+					return nil
+				}
 				return err
 			}
 			continue
@@ -1066,9 +1183,13 @@ func scanSSE(resp *http.Response, handleData func(string) error) error {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("openai responses: stream read failed: %w", err)
+		return fmt.Errorf("openai: SSE read failed: %w", err)
 	}
-	return dispatch()
+	err := dispatch()
+	if err == errSSEDone {
+		return nil
+	}
+	return err
 }
 
 func responsesStreamFailure(eventType string, rawResponse json.RawMessage) error {

@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,7 +30,7 @@ func NewResponsesClient(opts ...spec.ClientOption) (spec.ResponsesClient, error)
 // CreateResponse explicitly uses POST /responses regardless of whether the
 // configured URL is an API root, /chat/completions, or /responses endpoint.
 func (c *clientImpl) CreateResponse(ctx context.Context, request spec.ResponseCreateRequest, opts ...spec.Option) (*spec.Response, error) {
-	if request.Model == "" {
+	if request.Model == "" && request.Prompt == nil && request.ExtraFields["prompt"] == nil {
 		return nil, fmt.Errorf("openai responses: model is required")
 	}
 	normalizedInput, err := normalizeResponseInput(request.Input)
@@ -75,7 +76,9 @@ func (c *clientImpl) RetrieveResponse(ctx context.Context, responseID string, op
 	addIncludes(query, options.Include)
 	if options.Stream {
 		query.Set("stream", "true")
-		if options.StartingAfter > 0 {
+		if options.StartingAfterSequence != nil {
+			query.Set("starting_after", strconv.Itoa(*options.StartingAfterSequence))
+		} else if options.StartingAfter > 0 {
 			query.Set("starting_after", strconv.Itoa(options.StartingAfter))
 		}
 		if options.IncludeObfuscation != nil {
@@ -222,6 +225,9 @@ func (c *clientImpl) CreateConversation(ctx context.Context, request spec.Conver
 }
 
 func (c *clientImpl) RetrieveConversation(ctx context.Context, conversationID string) (*spec.Conversation, error) {
+	if err := validateResourceID("conversation", conversationID); err != nil {
+		return nil, err
+	}
 	endpoint, err := c.conversationsURL(conversationID)
 	if err != nil {
 		return nil, err
@@ -234,6 +240,9 @@ func (c *clientImpl) RetrieveConversation(ctx context.Context, conversationID st
 }
 
 func (c *clientImpl) UpdateConversation(ctx context.Context, conversationID string, request spec.ConversationUpdateRequest) (*spec.Conversation, error) {
+	if err := validateResourceID("conversation", conversationID); err != nil {
+		return nil, err
+	}
 	endpoint, err := c.conversationsURL(conversationID)
 	if err != nil {
 		return nil, err
@@ -242,6 +251,9 @@ func (c *clientImpl) UpdateConversation(ctx context.Context, conversationID stri
 }
 
 func (c *clientImpl) DeleteConversation(ctx context.Context, conversationID string) (*spec.ResponseDeleted, error) {
+	if err := validateResourceID("conversation", conversationID); err != nil {
+		return nil, err
+	}
 	endpoint, err := c.conversationsURL(conversationID)
 	if err != nil {
 		return nil, err
@@ -281,6 +293,9 @@ func (c *clientImpl) ListConversationItems(ctx context.Context, conversationID s
 }
 
 func (c *clientImpl) RetrieveConversationItem(ctx context.Context, conversationID, itemID string, include []string) (*spec.ResponseInputItem, error) {
+	if err := validateResourceID("item", itemID); err != nil {
+		return nil, err
+	}
 	endpoint, err := c.conversationItemsURL(conversationID, itemID)
 	if err != nil {
 		return nil, err
@@ -299,6 +314,9 @@ func (c *clientImpl) RetrieveConversationItem(ctx context.Context, conversationI
 }
 
 func (c *clientImpl) DeleteConversationItem(ctx context.Context, conversationID, itemID string) (*spec.ResponseDeleted, error) {
+	if err := validateResourceID("item", itemID); err != nil {
+		return nil, err
+	}
 	endpoint, err := c.conversationItemsURL(conversationID, itemID)
 	if err != nil {
 		return nil, err
@@ -311,8 +329,8 @@ func (c *clientImpl) headers() http.Header {
 }
 
 func (c *clientImpl) responseResourceURL(responseID string) (string, error) {
-	if responseID == "" {
-		return "", fmt.Errorf("openai responses: response ID is required")
+	if err := validateResourceID("response", responseID); err != nil {
+		return "", err
 	}
 	root, err := responsesEndpointURL(c.config.APIURL)
 	if err != nil {
@@ -339,6 +357,9 @@ func (c *clientImpl) conversationsURL(conversationID string) (string, error) {
 		return "", fmt.Errorf("openai responses: build conversations URL: %w", err)
 	}
 	if conversationID != "" {
+		if err := validateResourceID("conversation", conversationID); err != nil {
+			return "", err
+		}
 		endpoint, err = url.JoinPath(endpoint, conversationID)
 		if err != nil {
 			return "", fmt.Errorf("openai responses: build conversation URL: %w", err)
@@ -348,8 +369,8 @@ func (c *clientImpl) conversationsURL(conversationID string) (string, error) {
 }
 
 func (c *clientImpl) conversationItemsURL(conversationID, itemID string) (string, error) {
-	if conversationID == "" {
-		return "", fmt.Errorf("openai responses: conversation ID is required")
+	if err := validateResourceID("conversation", conversationID); err != nil {
+		return "", err
 	}
 	endpoint, err := c.conversationsURL(conversationID)
 	if err != nil {
@@ -360,6 +381,9 @@ func (c *clientImpl) conversationItemsURL(conversationID, itemID string) (string
 		return "", fmt.Errorf("openai responses: build conversation items URL: %w", err)
 	}
 	if itemID != "" {
+		if err := validateResourceID("item", itemID); err != nil {
+			return "", err
+		}
 		endpoint, err = url.JoinPath(endpoint, itemID)
 		if err != nil {
 			return "", fmt.Errorf("openai responses: build conversation item URL: %w", err)
@@ -421,44 +445,56 @@ func requestMap(request any) (map[string]any, error) {
 		return nil, fmt.Errorf("openai responses: encode request: %w", err)
 	}
 	var body map[string]any
-	if err := json.Unmarshal(encoded, &body); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	if err := decoder.Decode(&body); err != nil {
 		return nil, fmt.Errorf("openai responses: build request: %w", err)
 	}
 	return body, nil
 }
 
 func responsesEndpointURL(configured string) (string, error) {
-	parsed, err := url.Parse(configured)
-	if err != nil {
-		return "", fmt.Errorf("openai responses: invalid API URL: %w", err)
-	}
-	if parsed.Scheme == "" || parsed.Host == "" {
-		return "", fmt.Errorf("openai responses: API URL must be absolute")
-	}
-	path := strings.TrimRight(parsed.Path, "/")
-	switch {
-	case strings.HasSuffix(path, "/chat/completions"):
-		path = strings.TrimSuffix(path, "/chat/completions") + "/responses"
-	case strings.HasSuffix(path, "/responses"):
-	case strings.HasSuffix(path, "/v1"):
-		path += "/responses"
-	default:
-		path += "/responses"
-	}
-	parsed.Path = path
-	parsed.RawPath = ""
-	parsed.Fragment = ""
-	return parsed.String(), nil
+	return apiEndpointURL(configured, "responses")
 }
 
 func apiV1RootURL(configured string) (string, error) {
-	responsesURL, err := responsesEndpointURL(configured)
+	parsed, err := url.Parse(configured)
+	if err != nil {
+		return "", fmt.Errorf("openai: invalid API URL: %w", err)
+	}
+	if parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "ws" && parsed.Scheme != "wss") {
+		return "", fmt.Errorf("openai: API URL must be an absolute HTTP(S) or WebSocket URL")
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	for _, suffix := range []string{
+		"/chat/completions", "/responses", "/images/generations", "/images/edits", "/images/variations",
+		"/images", "/audio/speech", "/audio/transcriptions", "/audio/translations", "/embeddings", "/moderations", "/models", "/conversations",
+	} {
+		if strings.HasSuffix(path, suffix) {
+			path = strings.TrimSuffix(path, suffix)
+			break
+		}
+	}
+	parsed.Path, parsed.RawPath, parsed.Fragment = path, "", ""
+	return parsed.String(), nil
+}
+
+func apiEndpointURL(configured, resource string) (string, error) {
+	root, err := apiV1RootURL(configured)
 	if err != nil {
 		return "", err
 	}
-	parsed, _ := url.Parse(responsesURL)
-	parsed.Path = strings.TrimSuffix(strings.TrimRight(parsed.Path, "/"), "/responses")
-	return parsed.String(), nil
+	return url.JoinPath(root, resource)
+}
+
+func validateResourceID(resource, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("openai: %s ID is required", resource)
+	}
+	if id == "." || id == ".." || strings.ContainsAny(id, "/\\?#%") {
+		return fmt.Errorf("openai: invalid %s ID %q", resource, id)
+	}
+	return nil
 }
 
 func withQuery(endpoint string, values url.Values) string {

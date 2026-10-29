@@ -34,6 +34,54 @@ type ImagesClient interface {
 	EditImage(ctx context.Context, request ImageEditRequest) (*ImageResponse, error)
 }
 
+// ImageStreamingClient is optional so existing ImagesClient implementations
+// remain source compatible.
+type ImageStreamingClient interface {
+	CreateImageStream(context.Context, ImageGenerationRequest, ImageEventCallback) (*ImageResponse, error)
+	EditImageStream(context.Context, ImageEditRequest, ImageEventCallback) (*ImageResponse, error)
+}
+
+type ImageVariationsClient interface {
+	CreateImageVariation(context.Context, ImageVariationRequest) (*ImageResponse, error)
+}
+
+type ImagesAPIClient interface {
+	ImagesClient
+	ImageStreamingClient
+	ImageVariationsClient
+}
+
+type EmbeddingsClient interface {
+	CreateEmbedding(context.Context, EmbeddingRequest) (*EmbeddingResponse, error)
+}
+
+type ModelsClient interface {
+	ListModels(context.Context) (*ModelList, error)
+	RetrieveModel(context.Context, string) (*ModelInfo, error)
+}
+
+type ModerationsClient interface {
+	CreateModeration(context.Context, ModerationRequest) (*ModerationResponse, error)
+}
+
+type AudioClient interface {
+	CreateSpeech(context.Context, SpeechRequest) (*SpeechResponse, error)
+	CreateSpeechStream(context.Context, SpeechRequest) (*SpeechStream, error)
+	CreateTranscription(context.Context, TranscriptionRequest) (*TranscriptionResponse, error)
+	CreateTranscriptionStream(context.Context, TranscriptionRequest, TranscriptionEventCallback) (*TranscriptionResponse, error)
+	CreateTranslation(context.Context, AudioTranslationRequest) (*TranscriptionResponse, error)
+}
+
+// OpenAIClient exposes the model APIs without provider type assertions.
+type OpenAIClient interface {
+	ResponsesClient
+	ImagesAPIClient
+	EmbeddingsClient
+	ModelsClient
+	ModerationsClient
+	AudioClient
+}
+
 // RealtimeTranscriptionClient is implemented by providers that support
 // bidirectional realtime speech recognition.
 type RealtimeTranscriptionClient interface {

@@ -21,10 +21,12 @@ const (
 
 // Config 包含了执行一次Chat调用所需的所有配置。
 type Config struct {
-	Provider string
-	Model    string
-	APIKey   string
-	APIURL   string
+	Provider     string
+	Model        string
+	APIKey       string
+	APIURL       string
+	Organization string
+	Project      string
 	// SessionID identifies a session for OpenCode APIs. Empty generates an ID
 	// per client; stateless calls need an explicit ID to share a conversation.
 	SessionID string

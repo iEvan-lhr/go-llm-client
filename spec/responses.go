@@ -28,11 +28,14 @@ func (e ResponseWebSocketCreateEvent) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var event map[string]any
+	var event map[string]json.RawMessage
 	if err := json.Unmarshal(body, &event); err != nil {
 		return nil, fmt.Errorf("responses websocket: build create event: %w", err)
 	}
-	event["type"] = e.Type
+	event["type"], err = json.Marshal(e.Type)
+	if err != nil {
+		return nil, err
+	}
 	return json.Marshal(event)
 }
 
@@ -41,7 +44,7 @@ func (e ResponseWebSocketCreateEvent) MarshalJSON() ([]byte, error) {
 // ExtraFields are merged into the JSON object so newly introduced API fields
 // can be used before this package adds a dedicated field.
 type ResponseCreateRequest struct {
-	Model                string                   `json:"model"`
+	Model                string                   `json:"model,omitempty"`
 	Input                any                      `json:"input,omitempty"`
 	Instructions         any                      `json:"instructions,omitempty"`
 	PreviousResponseID   string                   `json:"previous_response_id,omitempty"`
@@ -80,7 +83,24 @@ type ResponseCreateRequest struct {
 // safety for stable fields.
 func (r ResponseCreateRequest) MarshalJSON() ([]byte, error) {
 	type alias ResponseCreateRequest
-	return marshalWithExtra(alias(r), r.ExtraFields)
+	extra := make(map[string]any, len(r.ExtraFields)+4)
+	for key, value := range r.ExtraFields {
+		extra[key] = value
+	}
+	// Non-nil empty collections explicitly clear inherited defaults.
+	if r.Tools != nil {
+		extra["tools"] = r.Tools
+	}
+	if r.Include != nil {
+		extra["include"] = r.Include
+	}
+	if r.Metadata != nil {
+		extra["metadata"] = r.Metadata
+	}
+	if r.ContextManagement != nil {
+		extra["context_management"] = r.ContextManagement
+	}
+	return marshalWithExtra(alias(r), extra)
 }
 
 // ResponseInputContent is a typed content part accepted inside a Responses
@@ -154,41 +174,52 @@ type ResponseStreamOptions struct {
 // Responses tools. For uncommon or newly introduced tools callers may put a
 // map[string]any directly in ResponseCreateRequest.Tools.
 type ResponseTool struct {
-	Type              string         `json:"type"`
-	Name              string         `json:"name,omitempty"`
-	Description       string         `json:"description,omitempty"`
-	Parameters        any            `json:"parameters,omitempty"`
-	Strict            *bool          `json:"strict,omitempty"`
-	Format            any            `json:"format,omitempty"`
-	VectorStoreIDs    []string       `json:"vector_store_ids,omitempty"`
-	MaxNumResults     int            `json:"max_num_results,omitempty"`
-	RankingOptions    any            `json:"ranking_options,omitempty"`
-	Filters           any            `json:"filters,omitempty"`
-	SearchContextSize string         `json:"search_context_size,omitempty"`
-	UserLocation      any            `json:"user_location,omitempty"`
-	ExternalWebAccess *bool          `json:"external_web_access,omitempty"`
-	ServerLabel       string         `json:"server_label,omitempty"`
-	ServerURL         string         `json:"server_url,omitempty"`
-	ServerDescription string         `json:"server_description,omitempty"`
-	Headers           map[string]any `json:"headers,omitempty"`
-	AllowedTools      any            `json:"allowed_tools,omitempty"`
-	RequireApproval   any            `json:"require_approval,omitempty"`
-	Container         any            `json:"container,omitempty"`
-	DisplayWidth      int            `json:"display_width,omitempty"`
-	DisplayHeight     int            `json:"display_height,omitempty"`
-	Environment       string         `json:"environment,omitempty"`
-	Size              string         `json:"size,omitempty"`
-	Quality           string         `json:"quality,omitempty"`
-	OutputFormat      string         `json:"output_format,omitempty"`
-	Background        string         `json:"background,omitempty"`
-	OutputCompression int            `json:"output_compression,omitempty"`
-	PartialImages     int            `json:"partial_images,omitempty"`
-	Moderation        string         `json:"moderation,omitempty"`
-	Tools             []any          `json:"tools,omitempty"`
-	Execution         any            `json:"execution,omitempty"`
-	AllowedCallers    []string       `json:"allowed_callers,omitempty"`
-	DeferLoading      *bool          `json:"defer_loading,omitempty"`
-	ExtraFields       map[string]any `json:"-"`
+	Type              string             `json:"type"`
+	Model             string             `json:"model,omitempty"`
+	Action            string             `json:"action,omitempty"`
+	InputFidelity     string             `json:"input_fidelity,omitempty"`
+	InputImageMask    *ResponseImageMask `json:"input_image_mask,omitempty"`
+	Name              string             `json:"name,omitempty"`
+	Description       string             `json:"description,omitempty"`
+	Parameters        any                `json:"parameters,omitempty"`
+	Strict            *bool              `json:"strict,omitempty"`
+	Format            any                `json:"format,omitempty"`
+	VectorStoreIDs    []string           `json:"vector_store_ids,omitempty"`
+	MaxNumResults     int                `json:"max_num_results,omitempty"`
+	RankingOptions    any                `json:"ranking_options,omitempty"`
+	Filters           any                `json:"filters,omitempty"`
+	SearchContextSize string             `json:"search_context_size,omitempty"`
+	UserLocation      any                `json:"user_location,omitempty"`
+	ExternalWebAccess *bool              `json:"external_web_access,omitempty"`
+	ServerLabel       string             `json:"server_label,omitempty"`
+	ServerURL         string             `json:"server_url,omitempty"`
+	ConnectorID       string             `json:"connector_id,omitempty"`
+	Authorization     string             `json:"authorization,omitempty"`
+	ServerDescription string             `json:"server_description,omitempty"`
+	Headers           map[string]any     `json:"headers,omitempty"`
+	AllowedTools      any                `json:"allowed_tools,omitempty"`
+	RequireApproval   any                `json:"require_approval,omitempty"`
+	Container         any                `json:"container,omitempty"`
+	DisplayWidth      int                `json:"display_width,omitempty"`
+	DisplayHeight     int                `json:"display_height,omitempty"`
+	Environment       string             `json:"environment,omitempty"`
+	Size              string             `json:"size,omitempty"`
+	Quality           string             `json:"quality,omitempty"`
+	OutputFormat      string             `json:"output_format,omitempty"`
+	Background        string             `json:"background,omitempty"`
+	OutputCompression int                `json:"output_compression,omitempty"`
+	PartialImages     int                `json:"partial_images,omitempty"`
+	Moderation        string             `json:"moderation,omitempty"`
+	Tools             []any              `json:"tools,omitempty"`
+	Execution         any                `json:"execution,omitempty"`
+	AllowedCallers    []string           `json:"allowed_callers,omitempty"`
+	DeferLoading      *bool              `json:"defer_loading,omitempty"`
+	ExtraFields       map[string]any     `json:"-"`
+}
+
+type ResponseImageMask struct {
+	FileID   string `json:"file_id,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 func (t ResponseTool) MarshalJSON() ([]byte, error) {
@@ -254,10 +285,12 @@ func NamedFunctionToolChoice(name string) any {
 // ResponseRetrieveOptions controls GET /responses/{id}. Stream resumes the
 // SSE event stream; StartingAfter is the last received sequence number.
 type ResponseRetrieveOptions struct {
-	Include            []string
-	Stream             bool
-	StartingAfter      int
-	IncludeObfuscation *bool
+	Include       []string
+	Stream        bool
+	StartingAfter int
+	// StartingAfterSequence allows an explicit zero and overrides StartingAfter.
+	StartingAfterSequence *int
+	IncludeObfuscation    *bool
 }
 
 // ResponseInputItemsOptions controls response input-item pagination.
@@ -285,15 +318,18 @@ type ResponseDeleted struct {
 }
 
 type ResponseInputTokenCountRequest struct {
-	Model             string                   `json:"model"`
-	Input             any                      `json:"input,omitempty"`
-	Instructions      any                      `json:"instructions,omitempty"`
-	Tools             []any                    `json:"tools,omitempty"`
-	Conversation      any                      `json:"conversation,omitempty"`
-	ParallelToolCalls *bool                    `json:"parallel_tool_calls,omitempty"`
-	Text              *ResponseTextConfig      `json:"text,omitempty"`
-	Reasoning         *ResponseReasoningConfig `json:"reasoning,omitempty"`
-	ExtraFields       map[string]any           `json:"-"`
+	Model              string                   `json:"model"`
+	Input              any                      `json:"input,omitempty"`
+	Instructions       any                      `json:"instructions,omitempty"`
+	Tools              []any                    `json:"tools,omitempty"`
+	Conversation       any                      `json:"conversation,omitempty"`
+	PreviousResponseID string                   `json:"previous_response_id,omitempty"`
+	ToolChoice         any                      `json:"tool_choice,omitempty"`
+	Truncation         any                      `json:"truncation,omitempty"`
+	ParallelToolCalls  *bool                    `json:"parallel_tool_calls,omitempty"`
+	Text               *ResponseTextConfig      `json:"text,omitempty"`
+	Reasoning          *ResponseReasoningConfig `json:"reasoning,omitempty"`
+	ExtraFields        map[string]any           `json:"-"`
 }
 
 func (r ResponseInputTokenCountRequest) MarshalJSON() ([]byte, error) {
@@ -388,17 +424,37 @@ func (c ResponseOutputContent) MarshalJSON() ([]byte, error) {
 func (i *ResponseOutputItem) UnmarshalJSON(data []byte) error {
 	type alias ResponseOutputItem
 	var decoded alias
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	// MCP errors may be strings; other variants use structured API errors.
+	wire := struct {
+		*alias
+		Error json.RawMessage `json:"error"`
+	}{alias: &decoded}
+	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
 	*i = ResponseOutputItem(decoded)
+	errorJSON := wire.Error
+	if len(errorJSON) > 0 && string(errorJSON) != "null" {
+		i.ToolError = append(json.RawMessage(nil), errorJSON...)
+		if errorJSON[0] == '{' {
+			if err := json.Unmarshal(errorJSON, &i.Error); err != nil {
+				return err
+			}
+		}
+	}
 	i.Raw = append(i.Raw[:0], data...)
 	return nil
 }
 
 func (i ResponseOutputItem) MarshalJSON() ([]byte, error) {
 	type alias ResponseOutputItem
-	return marshalWithRaw(alias(i), i.Raw, nil)
+	typed := alias(i)
+	var extra map[string]any
+	if len(i.ToolError) > 0 {
+		extra = map[string]any{"error": i.ToolError}
+		typed.Error = nil
+	}
+	return marshalWithRaw(typed, i.Raw, extra)
 }
 
 func (i *ResponseInputItem) UnmarshalJSON(data []byte) error {
@@ -456,16 +512,23 @@ func marshalWithRaw(value any, raw json.RawMessage, extra map[string]any) ([]byt
 	if len(extra) == 0 && len(raw) == 0 {
 		return typedJSON, nil
 	}
-	merged := make(map[string]any, len(extra)+8)
+	merged := make(map[string]json.RawMessage, len(extra)+8)
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &merged); err != nil {
 			return nil, fmt.Errorf("responses: merge raw fields: %w", err)
 		}
+		if merged == nil {
+			merged = make(map[string]json.RawMessage, len(extra)+8)
+		}
 	}
 	for key, item := range extra {
-		merged[key] = item
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return nil, err
+		}
+		merged[key] = encoded
 	}
-	var typed map[string]any
+	var typed map[string]json.RawMessage
 	if err := json.Unmarshal(typedJSON, &typed); err != nil {
 		return nil, fmt.Errorf("responses: merge request fields: %w", err)
 	}

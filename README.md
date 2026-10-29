@@ -6,12 +6,13 @@
 
 * **统一接口**：一套代码适配 Dashscope (阿里云百炼)、OpenAI、OpenCode Go、OpenCode System One、ZHIPU AI（智谱）及各类私有化部署模型（Generic）。
 * **客户端模式 (Client)**：内置上下文记忆管理，像聊天一样简单地调用。
-* **多模态输入与图像生成 (New 🚀)**：支持图片 URL/Base64/本地文件、音频、文档和文件 ID 输入，并支持 DashScope 异步文生图、OpenAI Responses `image_generation` 以及独立的 Images 生成/编辑 API。
+* **多模态输入与图像生成 (New 🚀)**：支持图片 URL/Base64/本地文件、音频、文档和文件 ID 输入，并支持 DashScope 异步文生图、OpenAI Responses `image_generation` 以及独立 Images 生成、多图编辑、变体和图片流式回调。
 * **DashScope 实时语音识别**：统一支持 Qwen-Audio 3.0、Fun-ASR、Qwen3-ASR-Realtime 与 Paraformer 的双向 WebSocket 音频流和实时转写事件。
 * **流式响应 (Streaming)**：支持打字机效果，提供便捷的回调函数 (`StreamCallback`)。
 * **灵活的对话控制**：支持带历史对话、不带历史对话 (`SendNoHistory`) 以及流式不记录 (`SendStreamNoHistory`) 等多种模式。
 * **思考模式支持**：针对 DeepSeek R1 / Qwen 等推理模型，自动处理 `<think>` 标签或特定参数。
 * **完整 OpenAI Responses 支持**：覆盖 SSE、WebSocket、Function Calling、Hosted Tools、结构化输出、后台任务、续流、Compaction、Conversations、输入 token 计数和原始字段保留。
+* **OpenAI 常用模型接口**：支持 Embeddings（float/base64）、Models、Moderations、语音合成、音频转写（含 SSE）和翻译；可通过 `openai.NewAPIClient` 使用统一的强类型入口。
 
 ## 📦 安装
 
@@ -536,6 +537,8 @@ _ = session.Finish(ctx)
 
 ## OpenAI Chat Completions 与 Responses API
 
+新增接口的完整示例和能力清单见 [OpenAI API 使用指南](docs/openai-api.md)。可运行示例位于 [examples/openai](examples/openai/main.go)。
+
 普通 `Send`/`SendParts` 会继续按配置路径选择 Chat Completions 或 Responses。`SendResponse`、`CreateResponse` 以及 Responses 生命周期方法会显式调用 Responses API，因此 `APIURL` 可以填写 API 根路径、`/chat/completions` 或 `/responses`，客户端会安全派生出正确端点。下面使用 OpenAI 官方端点；兼容服务只需替换 `APIURL`：
 
 ```go
@@ -746,16 +749,16 @@ images := resp.Responses.ImageGenerationResults() // base64 图片列表
 
 `SendText2Image` 在 OpenAI provider 下也会自动改用 Responses `image_generation` 工具，其他 provider 保持原行为。
 
-### 独立 Images API：生成与编辑
+### 独立 Images API：生成、编辑与流式图片
 
 `CreateImage` 和 `EditImage` 不经过 Responses，分别直连 `/v1/images/generations` 与 `/v1/images/edits`。`APIURL` 可以配置为 API 根路径、`/chat/completions`、`/responses` 或 Images 端点，客户端会派生出正确路径。
 
 ```go
 c, err := client.New(llm.Config{
 	Provider: "openai",
-	Model:    "gpt-image-2",
-	APIKey:   os.Getenv("POKE_API_KEY"),
-	APIURL:   "https://www.poke2api.com/v1",
+	Model:    os.Getenv("OPENAI_IMAGE_MODEL"), // 设置为账户可用的图像模型
+	APIKey:   os.Getenv("OPENAI_API_KEY"),
+	APIURL:   "https://api.openai.com/v1",
 })
 if err != nil {
 	return err
@@ -765,7 +768,6 @@ generated, err := c.CreateImage(ctx, spec.ImageGenerationRequest{
 	Prompt:         "一座位于雪山脚下的未来观测站，夜空可见银河，电影感写实摄影，无文字，无人物",
 	Size:           "1024x1024",
 	Quality:        "high",
-	ResponseFormat: "b64_json",
 })
 if err != nil {
 	return err
@@ -780,7 +782,6 @@ edited, err := c.EditImage(ctx, spec.ImageEditRequest{
 	Prompt:         "保留主体，把背景改为克制的黑白编辑风格，并加入少量深蓝信号色",
 	Size:           "1024x1024",
 	Quality:        "high",
-	ResponseFormat: "b64_json",
 	Image:          reference,
 })
 if err != nil {
@@ -789,23 +790,32 @@ if err != nil {
 editedImages := edited.Base64Images()
 ```
 
-请求中省略 `Model` 时会使用 `llm.Config.Model`。已有内存图片可以通过 `spec.NewImageFileBytes` 传入；需要 mask 时设置 `ImageEditRequest.Mask`。底层无状态用法可使用 `openai.NewImagesClient` 获取 `spec.ImagesClient`。
+请求中省略 `Model` 时会使用 `llm.Config.Model`。已有内存图片可以通过 `spec.NewImageFileBytes` 传入；需要 mask 时设置 `ImageEditRequest.Mask`。底层用法可使用 `openai.NewImagesAPIClient`，同时提供生成、编辑、变体及流式方法；原有 `NewImagesClient` 保持兼容。GPT Image 模型返回 base64 图片，`ResponseFormat` 主要用于支持该参数的 DALL·E/兼容模型。
 
-#### 真实图片生成测试
+#### 流式图片与多图编辑
 
-根目录的 `openai_llm_test.go` 包含 `TestOpenAIImageGeneration`。该测试会真实调用 Images API，优先解码 `b64_json`；兼容网关若返回 `url`，测试会下载图片。解码后还会校验 MIME 类型，并把图片保留在本地。PowerShell 运行方式：
+```go
+result, err := c.CreateImageStream(ctx, spec.ImageGenerationRequest{
+	Prompt: "一座雪山中的观测站", PartialImages: 2, OutputFormat: "png",
+}, func(_ context.Context, event spec.ImageStreamEvent) error {
+	if event.Type == "image_generation.partial_image" {
+		fmt.Printf("预览 %d，base64 长度 %d\n", event.PartialImageIndex, len(event.Base64JSON))
+	}
+	return nil // 返回 error 会立即停止接收并关闭连接
+})
+if err != nil { return err }
+images := result.Base64Images() // 只包含最终图片，不混入预览
 
-```powershell
-$env:OPENAI_TEST_API_KEY = $env:POKE_API_KEY
-$env:OPENAI_TEST_BASE_URL = "https://www.poke2api.com/v1"
-$env:OPENAI_TEST_IMAGE_MODEL = "gpt-image-2"
-$env:OPENAI_TEST_IMAGE_OUTPUT = "openai-image-generation-test.png"
-go test -run '^TestOpenAIImageGeneration$' -count=1 -v .
+// Image 与 Images 二选一；多图通过 image[] 上传，顺序保持不变。
+edited, err := c.EditImage(ctx, spec.ImageEditRequest{
+	Prompt: "将两个参考主体放进同一幅画面", Images: []spec.ImageFile{first, second},
+})
+// EditImageStream 的请求相同，另传 ImageEventCallback。
 ```
 
-还可以通过 `OPENAI_TEST_IMAGES_URL` 单独覆盖生成端点。测试使用无人物、无角色 IP 的雪山未来观测站提示词；带有受保护角色的提示词可能被兼容网关以 `content_policy_violation` 拦截。
+`CreateImageVariation` 调用 `/images/variations`，需指定支持变体的模型，例如 `dall-e-2`；不能把变体能力与 GPT Image 编辑混用。
 
-2026-08-09 使用 POKE 兼容端点实测通过：耗时 23.17 秒，响应返回 `b64_json`，解码得到 2,835,660 字节的 PNG，输出到 `openai-image-generation-test.png`。请求指定 `1024x1024/high`，但该网关响应及实际文件为 `1536x1024`、`quality=auto`，说明兼容服务可能会归一化或忽略部分 Images 参数。
+本地协议测试无需真实密钥：`go test ./providers/openai ./client ./spec`。实际生图示例（会调用 API）可设置 `OPENAI_API_KEY`、`OPENAI_IMAGE_MODEL` 后运行 `go run ./examples/openai -mode image -output generated.png`。
 
 ### 后台任务、续流与生命周期
 
@@ -930,6 +940,8 @@ resp, err := c.SendResponse(
 
 `llm.Config.Parameters` 会原样透传两种 API 的扩展参数；Responses 模式下 `max_tokens` 会自动转换为 `max_output_tokens`。每个 `ResponseOutputItem`、内容 part 和 SSE 事件都保留 `Raw`，未知字段可以无损读取并重新发送；完整 HTTP JSON 仍位于 `RawResponse`。
 
+Responses 的助手消息还会将原生输出保存在 `Message.ResponsesOutput`，在下一轮自动回传推理及工具 items；手动修改该消息内容前应清空此字段。`StreamEvent.PartialImageB64` 可读取 Responses 生图工具的预览，独立 Images API 则使用 `ImageStreamEvent.Base64JSON`。断流且未收到完成事件时返回错误；兼容服务显式发送 `[DONE]` 时仍可聚合已完成的 output items。
+
 ### 请求 Options 与底层客户端配置
 
 | 分类 | Options |
@@ -944,7 +956,7 @@ resp, err := c.SendResponse(
 | 文生图请求 | `WithText2Image`、`WithText2ImageParameters` |
 | 文生图参数 | `WithText2ImageSize`、`WithText2ImageWatermark`、`WithText2ImageNegativePrompt`、`WithText2ImagePromptExtend`、`WithText2ImageCount` |
 
-直接创建底层 OpenAI client 时，可使用 `WithAPIKey`、`WithAPIURL`、`WithHTTPClient` 和 `WithTimeout`；`NewClientConfig` 与 `NewRequestConfig` 可分别创建底层客户端配置和单次请求配置。可选布尔字段可以使用 `Bool`，结构化输出可用 `NewResponseJSONSchemaFormat` 快速构造严格的 `json_schema` format。
+直接创建底层 OpenAI client 时，可使用 `WithAPIKey`、`WithAPIURL`、`WithHTTPClient`、`WithTimeout`、`WithOrganization` 和 `WithProject`；`NewClientConfig` 与 `NewRequestConfig` 可分别创建底层客户端配置和单次请求配置。可选布尔字段可以使用 `Bool`，结构化输出可用 `NewResponseJSONSchemaFormat` 快速构造严格的 `json_schema` format。
 
 > 第三方兼容服务（例如 `poke2api.com`）不一定实现 `previous_response_id`、MCP、hosted tools、文件或全部事件类型；本库支持上述 OpenAI 协议结构，但实际能力仍以服务商为准。
 
@@ -1069,6 +1081,8 @@ func main() {
 | --- | --- |
 | `CreateImage` | 调用独立的 `/images/generations` JSON 接口 |
 | `EditImage` | 调用独立的 `/images/edits` multipart 接口 |
+| `CreateImageStream` / `EditImageStream` | 接收预览/完成事件，返回最终图片 |
+| `CreateImageVariation` | 调用 `/images/variations` |
 
 #### Conversations 与 Conversation Items
 
@@ -1090,6 +1104,12 @@ func main() {
 | `StreamRealtimeTranscription` | 从 `io.Reader` 自动分块发送音频、回调转写结果并管理完整会话生命周期 |
 | `StartRealtimeTranscription` | 建立 DashScope 双向实时语音识别会话并流式收发音频/转写事件 |
 | `SendEmbedding` | 生成单条或批量文本向量；需要 provider 实现 Embedding |
+| `CreateEmbedding` | 强类型向量请求，支持维度和 base64 编码 |
+| `ListModels` / `RetrieveModel` | 列出可用模型 / 查询模型信息 |
+| `CreateModeration` | 文本或图片内容审核 |
+| `CreateSpeech` / `CreateSpeechStream` | 语音合成，返回音频字节 / 可关闭的流 |
+| `CreateTranscription` / `CreateTranscriptionStream` | 音频转写，支持文本、时间戳和 SSE 事件 |
+| `CreateTranslation` | 音频翻译，支持 JSON、文本、SRT、VTT |
 | `SearchWeb` | 调用 provider 的独立联网搜索 API（目前支持 ZHIPU） |
 | `SendText2Image` | DashScope 使用异步文生图；OpenAI 使用 Responses 图像生成工具 |
 | `SendOCR` | 使用自定义 file part 和 OCR 任务参数识别文档 |
@@ -1104,6 +1124,7 @@ func main() {
 | `Provider` | 厂商标识: `dashscope`, `openai`, `opencode-go`, `opencode`（System One）, `zhipu`, `deepseek`, `openrouter`, `generic` |
 | `Model` | 模型名称: `qwen-plus`, `gpt-4o`, `qwen-image-plus` 等 |
 | `APIKey` | API 密钥 |
+| `Organization` / `Project` | OpenAI 组织与项目请求头 |
 | `APIURL` | (可选) 自定义接口地址，用于代理或私有部署 |
 | `SessionID` | (可选) OpenCode Go 会话标识；有状态 client 默认自动生成，无状态多轮调用需显式复用 |
 | `UserAgent` | (可选) OpenCode Go 应用名称和版本，默认 `go-llm-client/1.0` |
